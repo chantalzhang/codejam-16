@@ -53,14 +53,17 @@ try {
     return result;
   }
 
-  await addWorker();
+  const first = await addWorker();
   await readyWorkers(1);
   const one = await run();
+  assert.match(await first.locator('#gpu-memory').textContent(), /^\d+ KB$|^\d+\.\d MB$/);
+  const tensorsAfterOne = await first.locator('#tensors').textContent();
   await addWorker();
   const third = await addWorker();
   await readyWorkers(3);
   assert.equal(await page.locator('#worker-count').textContent(), '3');
   const three = await run();
+  assert.equal(await first.locator('#tensors').textContent(), tensorsAfterOne, 'Worker leaked tensors between runs');
   assert.ok(three.workers.every(worker => worker.backend === 'webgl'));
   assert.equal(three.history.length, 41);
   assert.equal(three.timing.steps, 39);
@@ -98,6 +101,29 @@ try {
   assert.equal(image.timing.steps, 2);
   assert.ok(Object.values(image.timing).every(Number.isFinite));
   assert.match(await page.locator('#network-time').textContent(), /^-?\d+ ms$/);
+
+  // Simulate a phone GPU reset mid-run: the run must end quickly with a clear reason.
+  await page.locator('#task').selectOption('linear-function-v1');
+  await page.locator('#steps').fill('10000');
+  await page.locator('#start').click();
+  await page.waitForFunction(() => Number(document.querySelector('#step').textContent) >= 1);
+  const resetAt = Date.now();
+  await first.evaluate(async () => {
+    // Import the exact module URL the page loaded, so this is the page's TF.js instance.
+    const url = performance.getEntriesByType('resource').map(entry => entry.name)
+      .find(name => name.includes('@tensorflow_tfjs.js'));
+    const tf = await import(url);
+    tf.backend().gpgpu.gl.getExtension('WEBGL_lose_context').loseContext();
+  });
+  await first.waitForFunction(() => /GPU reset/.test(document.querySelector('#worker-status').textContent));
+  await page.waitForFunction(() => !document.querySelector('#export').disabled);
+  assert.ok(Date.now() - resetAt < 5_000, 'Run did not end promptly after a GPU reset');
+  const gpuReset = await exportRun();
+  // Mid-step resets report "GPU reset"; resets between steps show up as a disconnect.
+  assert.notEqual(gpuReset.outcome, 'completed');
+  assert.match(gpuReset.reason, /GPU reset|disconnected/);
+  await readyWorkers(1);
+
   await page.locator('#reset').click();
   assert.equal(await page.locator('#step').textContent(), '0');
   assert.equal(await page.locator('#loss').textContent(), '—');
@@ -109,6 +135,7 @@ try {
     initialLoss: three.history[0].loss,
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
+    simulatedGpuReset: gpuReset.reason,
     checks: 'One/three-worker equivalence, relay, export, stop, disconnect, restart, and reset passed.',
   }, null, 2));
 } finally {
