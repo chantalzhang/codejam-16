@@ -1,5 +1,5 @@
 import './style.css';
-import { initializeBackend } from './backend.js';
+import { initializeBackend, memoryUsage, onGpuReset } from './backend.js';
 import { SharedTrainer, timingSummary } from './shared-trainer.js';
 import { assignValues, computeGradients } from './tensors.js';
 import { tasks } from './tasks.js';
@@ -87,8 +87,9 @@ function workerTask(taskId) {
   return workerTasks.get(taskId);
 }
 
-let workerRunId, examplesProcessed = 0;
+let workerRunId, examplesProcessed = 0, currentStep;
 async function work(message) {
+  currentStep = message;
   const task = workerTask(message.taskId);
   if (!Number.isInteger(message.count) || message.count <= 0 ||
       !Number.isInteger(message.offset) || message.offset < 0 ||
@@ -104,8 +105,22 @@ async function work(message) {
   examplesProcessed += message.count;
   $('examples').textContent = examplesProcessed;
   $('compute').textContent = `${result.computeMs.toFixed(1)}ms`;
+  const { tensors, gpuBytes } = memoryUsage();
+  $('gpu-memory').textContent = gpuBytes < 2 ** 20 ? `${Math.round(gpuBytes / 1024)} KB` : `${(gpuBytes / 2 ** 20).toFixed(1)} MB`;
+  $('tensors').textContent = tensors;
   send({ type: 'gradient', runId: message.runId, step: message.step, count: message.count, ...result });
+  currentStep = undefined;
   $('worker-status').textContent = `Step ${message.step}: gradients sent. Waiting.`;
+}
+
+// Report the reset for any in-flight step, then leave: this page can't compute anymore.
+function handleGpuReset() {
+  const error = 'GPU reset (WebGL context lost). Reload this page to rejoin.';
+  $(role === 'worker' ? 'worker-status' : 'status').textContent = error;
+  if (currentStep && socket.readyState === WebSocket.OPEN) {
+    send({ type: 'worker-error', runId: currentStep.runId, step: currentStep.step, error });
+  }
+  socket.close();
 }
 
 async function initialize() {
@@ -114,6 +129,7 @@ async function initialize() {
   $('backend').textContent = role === 'coordinator'
     ? `Backend: ${backendLabel}. Combines updates and checks loss; worker tabs compute gradients.`
     : `Training backend: ${backendLabel}.`;
+  onGpuReset(handleGpuReset);
   if (role === 'coordinator') {
     showTask();
     resetModel();
