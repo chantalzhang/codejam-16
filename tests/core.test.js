@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
+import * as imageTask from '../src/image-task.js';
 import { SharedTrainer, splitBatch, averageGradients, timingSummary } from '../src/shared-trainer.js';
 import { assignValues, computeGradients, readValues } from '../src/tensors.js';
 
@@ -47,6 +48,26 @@ test('fixed global batches are divided without gaps or repeated examples', () =>
   assert.throws(() => splitBatch(1, ['a', 'b']), /batch size/);
   assert.throws(() => splitBatch(10, ['a', 'a']), /distinct/);
   assert.throws(() => splitBatch(10, []), /workers/);
+});
+
+test('image task gives identical batches however they are split, and computes finite gradients', async () => {
+  const before = tf.memory().numTensors;
+  const task = imageTask.createTask();
+  try {
+    assert.equal(task.variables.reduce((sum, variable) => sum + variable.size, 0), 6020);
+    const whole = task.makeBatch({ step: 3, offset: 0, count: 6 });
+    const parts = [task.makeBatch({ step: 3, offset: 0, count: 2 }), task.makeBatch({ step: 3, offset: 2, count: 4 })];
+    for (const key of ['xs', 'ys']) {
+      const joined = tf.concat(parts.map(part => part[key]));
+      assert.deepEqual(await joined.data(), await whole[key].data());
+      joined.dispose();
+    }
+    tf.dispose([whole, parts]);
+    const update = await computeGradients(task, { step: 1, offset: 0, count: 4 });
+    assert.ok(update.gradients.flat().every(Number.isFinite));
+    assert.ok(Number.isFinite(await task.evaluate()));
+  } finally { task.dispose(); }
+  assert.equal(tf.memory().numTensors, before);
 });
 
 test('timing summary skips warm-up and splits each step into compute, network, and coordinator time', () => {

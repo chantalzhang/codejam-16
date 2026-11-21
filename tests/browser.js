@@ -21,7 +21,8 @@ try {
   assert.equal(await page.locator('#worker-count').textContent(), '0');
   assert.match(await page.locator('#role-note').textContent(), /one shared model/);
   assert.equal(await page.locator('label').filter({ has: page.locator('#batch-size') }).textContent(), 'Examples per step ');
-  assert.equal(await page.locator('#task').inputValue(), 'linear-function-v1');
+  assert.equal(await page.locator('#task').inputValue(), 'image-benchmark-v1');
+  await page.locator('#task').selectOption('linear-function-v1');
 
   async function addWorker() {
     const worker = await browser.newPage();
@@ -42,9 +43,9 @@ try {
     await page.locator('#export').click();
     return JSON.parse(await readFile(await (await downloaded).path(), 'utf8'));
   }
-  async function run(steps = 40) {
+  async function run(steps = 40, batchSize = 17) {
     await page.locator('#steps').fill(String(steps));
-    await page.locator('#batch-size').fill('17');
+    await page.locator('#batch-size').fill(String(batchSize));
     await page.locator('#start').click();
     await page.waitForFunction(() => !document.querySelector('#export').disabled, null, { timeout: 60_000 });
     const result = await exportRun();
@@ -89,6 +90,14 @@ try {
   assert.match(disconnected.reason, /disconnected/);
   await readyWorkers(2);
   await run(3); // Old in-flight gradients must not contaminate this new run.
+
+  // Small image-task run on software WebGL: checks the CNN path and timing breakdown.
+  await page.locator('#task').selectOption('image-benchmark-v1');
+  const image = await run(3, 8);
+  assert.equal(image.taskId, 'image-benchmark-v1');
+  assert.equal(image.timing.steps, 2);
+  assert.ok(Object.values(image.timing).every(Number.isFinite));
+  assert.match(await page.locator('#network-time').textContent(), /^-?\d+ ms$/);
   await page.locator('#reset').click();
   assert.equal(await page.locator('#step').textContent(), '0');
   assert.equal(await page.locator('#loss').textContent(), '—');

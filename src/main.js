@@ -109,10 +109,11 @@ async function work(message) {
 }
 
 async function initialize() {
-  backend = await initializeBackend(role === 'worker' ? 'webgl' : 'cpu');
+  backend = await initializeBackend('webgl');
+  const backendLabel = backend === 'webgl' ? 'WebGL (browser graphics)' : 'CPU fallback (not GPU)';
   $('backend').textContent = role === 'coordinator'
-    ? 'CPU: combines updates and checks loss. Worker tabs compute training gradients.'
-    : backend === 'cpu' ? 'Training backend: CPU fallback (not GPU).' : 'Training backend: WebGL (browser graphics).';
+    ? `Backend: ${backendLabel}. Combines updates and checks loss; worker tabs compute gradients.`
+    : `Training backend: ${backendLabel}.`;
   if (role === 'coordinator') {
     showTask();
     resetModel();
