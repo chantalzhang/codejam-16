@@ -2,7 +2,7 @@ import './style.css';
 import { initializeBackend } from './backend.js';
 import { SharedTrainer, timingSummary } from './shared-trainer.js';
 import { assignValues, computeGradients } from './tensors.js';
-import { createTask, taskId, description, defaults } from './task.js';
+import { tasks } from './tasks.js';
 
 const $ = id => document.getElementById(id);
 const role = new URLSearchParams(location.search).get('role') === 'worker' ? 'worker' : 'coordinator';
@@ -11,10 +11,9 @@ $('role-note').textContent = role === 'coordinator'
   ? 'This tab combines worker gradients to update one shared model.'
   : 'This tab computes gradients for its share of the training examples.';
 $(role).hidden = false;
-$('task-note').textContent = description;
-$('steps').value = defaults.steps;
-$('batch-size').value = defaults.batchSize;
+for (const { taskId, name } of tasks) $('task').add(new Option(name, taskId));
 
+let selected = tasks[0];
 let task, trainer, socket, backend;
 let connected = false, running = false;
 let workers = [], lastRun;
@@ -24,13 +23,13 @@ function send(message) {
   socket.send(JSON.stringify(message));
 }
 function status(message) { $('status').textContent = message; }
+const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
 function refreshControls() {
-  const ready = workers.filter(worker => worker.ready && worker.taskId === taskId);
-  $('start').disabled = !connected || running || !ready.length;
+  $('start').disabled = !connected || running || !workers.some(canRun);
   $('stop').disabled = !running;
   $('reset').disabled = running || !task;
   $('export').disabled = running || !lastRun;
-  $('steps').disabled = $('batch-size').disabled = running;
+  $('task').disabled = $('steps').disabled = $('batch-size').disabled = running;
 }
 const TIMING_IDS = { stepMs: 'step-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
 function showProgress(point, history) {
@@ -42,9 +41,14 @@ function showProgress(point, history) {
     $(id).textContent = timing ? `${Math.round(timing[key])} ms` : '—';
   }
 }
+function showTask() {
+  $('task-note').textContent = selected.description;
+  $('steps').value = selected.defaults.steps;
+  $('batch-size').value = selected.defaults.batchSize;
+}
 function resetModel() {
   task?.dispose();
-  task = createTask();
+  task = selected.createTask();
   trainer = new SharedTrainer(task, { send, onProgress: showProgress });
   lastRun = undefined;
   $('step').textContent = '0';
@@ -56,7 +60,8 @@ function showWorkers() {
   for (const [index, worker] of workers.entries()) {
     const li = document.createElement('li');
     const backendLabel = worker.ready ? (worker.backend === 'webgl' ? 'WebGL' : 'CPU fallback') : 'preparing';
-    li.textContent = `Worker ${index + 1} (${worker.id.slice(0, 8)}) · ${backendLabel} · ${worker.taskId && worker.taskId !== taskId ? 'different task version' : worker.ready ? 'ready' : 'waiting'}`;
+    const state = !worker.ready ? 'waiting' : canRun(worker) ? 'ready' : 'different task version';
+    li.textContent = `Worker ${index + 1} (${worker.id.slice(0, 8)}) · ${backendLabel} · ${state}`;
     $('workers').append(li);
   }
   if (!workers.length) {
@@ -71,9 +76,20 @@ function showWorkers() {
   refreshControls();
 }
 
+// Workers create each task the first time the coordinator asks for it.
+const workerTasks = new Map();
+function workerTask(taskId) {
+  if (!workerTasks.has(taskId)) {
+    const module = tasks.find(candidate => candidate.taskId === taskId);
+    if (!module) throw new Error('Unknown task. Reload this page.');
+    workerTasks.set(taskId, module.createTask());
+  }
+  return workerTasks.get(taskId);
+}
+
 let workerRunId, examplesProcessed = 0;
 async function work(message) {
-  if (message.taskId !== task.id) throw new Error('Task versions do not match.');
+  const task = workerTask(message.taskId);
   if (!Number.isInteger(message.count) || message.count <= 0 ||
       !Number.isInteger(message.offset) || message.offset < 0 ||
       !Number.isInteger(message.step) || message.step <= 0) throw new Error('Invalid batch assignment.');
@@ -97,8 +113,10 @@ async function initialize() {
   $('backend').textContent = role === 'coordinator'
     ? 'CPU: combines updates and checks loss. Worker tabs compute training gradients.'
     : backend === 'cpu' ? 'Training backend: CPU fallback (not GPU).' : 'Training backend: WebGL (browser graphics).';
-  if (role === 'coordinator') resetModel();
-  else task = createTask();
+  if (role === 'coordinator') {
+    showTask();
+    resetModel();
+  }
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/swarm`);
   socket.addEventListener('open', () => send({ type: 'join', role }));
   let queue = Promise.resolve();
@@ -107,7 +125,7 @@ async function initialize() {
     if (message.type === 'welcome') {
       connected = true;
       $('connection').textContent = `Connected as ${role} · ${message.id.slice(0, 8)}`;
-      if (role === 'worker') send({ type: 'ready', backend, taskId });
+      if (role === 'worker') send({ type: 'ready', backend, tasks: tasks.map(({ taskId }) => taskId) });
       refreshControls();
     } else if (message.type === 'presence') {
       workers = message.workers;
@@ -149,7 +167,7 @@ $('start').addEventListener('click', async () => {
     status('Choose a positive whole-number batch size (≤100,000) and step count (≤10,000).');
     return;
   }
-  const participants = workers.filter(worker => worker.ready && worker.taskId === taskId);
+  const participants = workers.filter(canRun);
   running = true;
   resetModel();
   refreshControls();
@@ -157,7 +175,7 @@ $('start').addEventListener('click', async () => {
   try {
     const run = await trainer.train({
       workerIds: participants.map(worker => worker.id), steps, batchSize,
-      learningRate: defaults.learningRate,
+      learningRate: selected.defaults.learningRate,
     });
     lastRun = {
       ...run, timing: timingSummary(run.history), workers: participants,
@@ -171,6 +189,13 @@ $('start').addEventListener('click', async () => {
     running = false;
     refreshControls();
   }
+});
+$('task').addEventListener('change', () => {
+  selected = tasks.find(({ taskId }) => taskId === $('task').value);
+  showTask();
+  resetModel();
+  showWorkers();
+  status(`Selected: ${selected.name}.`);
 });
 $('stop').addEventListener('click', () => trainer.stop());
 $('reset').addEventListener('click', () => {

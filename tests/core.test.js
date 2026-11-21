@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as tf from '@tensorflow/tfjs';
-import { createTask } from '../src/task.js';
+import { createTask } from '../src/linear-task.js';
 import { SharedTrainer, splitBatch, averageGradients, timingSummary } from '../src/shared-trainer.js';
 import { assignValues, computeGradients, readValues } from '../src/tensors.js';
 

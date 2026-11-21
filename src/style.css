@@ -7,7 +7,7 @@ nav, .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;
 .meta { color: #666; font-size: 12px; margin: 16px 0; }
 .meta p { margin: 4px 0; }
 label { display: flex; align-items: center; gap: 8px; }
-input, button { font: inherit; }
+input, button, select { font: inherit; }
 input { width: 80px; }
 button { padding: 3px 10px; }
 .hint { color: #666; font-size: 12px; margin: -4px 0 16px; }
