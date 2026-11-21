@@ -61,6 +61,9 @@ try {
   const three = await run();
   assert.ok(three.workers.every(worker => worker.backend === 'webgl'));
   assert.equal(three.history.length, 41);
+  assert.equal(three.timing.steps, 39);
+  assert.ok(Object.values(three.timing).every(Number.isFinite));
+  assert.match(await page.locator('#network-time').textContent(), /^-?\d+ ms$/);
   assert.ok(three.history.at(-1).loss < 0.01);
   for (const point of three.history.slice(1)) {
     assert.equal(point.updates.length, 3);

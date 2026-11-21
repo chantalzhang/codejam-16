@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/task.js';
-import { SharedTrainer, splitBatch, averageGradients } from '../src/shared-trainer.js';
+import { SharedTrainer, splitBatch, averageGradients, timingSummary } from '../src/shared-trainer.js';
 import { assignValues, computeGradients, readValues } from '../src/tensors.js';
 
 await tf.setBackend('cpu');
@@ -47,6 +47,17 @@ test('fixed global batches are divided without gaps or repeated examples', () =>
   assert.throws(() => splitBatch(1, ['a', 'b']), /batch size/);
   assert.throws(() => splitBatch(10, ['a', 'a']), /distinct/);
   assert.throws(() => splitBatch(10, []), /workers/);
+});
+
+test('timing summary skips warm-up and splits each step into compute, network, and coordinator time', () => {
+  const point = (step, elapsedMs, waitMs, computeMs) => ({ step, elapsedMs, waitMs, updates: computeMs.map(ms => ({ computeMs: ms })) });
+  assert.equal(timingSummary([point(0, 0, 0, []), point(1, 900, 800, [700])]), null);
+  assert.deepEqual(timingSummary([
+    point(0, 0, 0, []),
+    point(1, 900, 800, [700]),
+    point(2, 1000, 80, [50, 60]),
+    point(3, 1120, 100, [70, 40]),
+  ]), { steps: 2, stepMs: 110, computeMs: 65, networkMs: 25, coordinatorMs: 20 });
 });
 
 test('averaging weights mean gradients by actual assigned example count', () => {

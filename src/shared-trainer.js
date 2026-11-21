@@ -26,6 +26,22 @@ export function averageGradients(updates, variables) {
     updates.reduce((sum, update) => sum + update.gradients[tensor][element] * update.count, 0) / total));
 }
 
+// Average time per step, skipping step 1 (GPU warm-up). Network time is approximate:
+// the wait for all gradients minus the slowest worker's compute time.
+export function timingSummary(history) {
+  const steps = history.slice(2).map((point, i) => {
+    const stepMs = point.elapsedMs - history[i + 1].elapsedMs;
+    const computeMs = Math.max(...point.updates.map(update => update.computeMs));
+    return { stepMs, computeMs, networkMs: point.waitMs - computeMs, coordinatorMs: stepMs - point.waitMs };
+  });
+  if (!steps.length) return null;
+  const mean = key => steps.reduce((sum, step) => sum + step[key], 0) / steps.length;
+  return {
+    steps: steps.length, stepMs: mean('stepMs'), computeMs: mean('computeMs'),
+    networkMs: mean('networkMs'), coordinatorMs: mean('coordinatorMs'),
+  };
+}
+
 export class SharedTrainer {
   constructor(task, { send, onProgress = () => {} }) {
     this.task = task;
@@ -102,20 +118,22 @@ export class SharedTrainer {
     const optimizer = tf.train.sgd(learningRate);
     const started = performance.now();
     const checkCancelled = () => { if (run.cancelReason) throw new Error(run.cancelReason); };
-    const record = async (step, updates = []) => {
+    const record = async (step, updates = [], waitMs = 0) => {
       const loss = await this.task.evaluate();
       checkCancelled();
       if (!Number.isFinite(loss)) throw new Error('Evaluation loss is not finite.');
-      const point = { step, loss, elapsedMs: performance.now() - started, updates };
+      const point = { step, loss, elapsedMs: performance.now() - started, waitMs, updates };
       run.history.push(point);
-      this.onProgress(point);
+      this.onProgress(point, run.history);
     };
     try {
       await record(0);
       for (let step = 1; step <= steps; step++) {
         const weights = await readValues(this.task.variables);
         checkCancelled();
+        const waitStarted = performance.now();
         const updates = await this.requestGradients(run, step, assignments, weights, timeoutMs);
+        const waitMs = performance.now() - waitStarted;
         checkCancelled();
         const gradients = averageGradients(updates, this.task.variables);
         tf.tidy(() => optimizer.applyGradients(Object.fromEntries(
@@ -125,7 +143,7 @@ export class SharedTrainer {
         )));
         await record(step, updates.map(({ workerId, count, loss, computeMs }) => ({
           workerId, count, loss, computeMs,
-        })));
+        })), waitMs);
       }
       run.outcome = 'completed';
     } catch (error) {
