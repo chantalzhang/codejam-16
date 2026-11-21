@@ -1,6 +1,7 @@
 import * as tf from '@tensorflow/tfjs';
 
 // This is a replaceable wiring test, not the project's chosen model or workload.
+export const name = 'Line fit (2 parameters)';
 export const description = 'Test task: learn y = 2x + 1 from generated examples. Checks training works, not GPU speed.';
 export const defaults = { steps: 40, batchSize: 128, learningRate: 0.1 };
 export const taskId = 'linear-function-v1';

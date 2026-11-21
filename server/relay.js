@@ -11,7 +11,7 @@ export function attachRelay(server) {
   };
   const presence = () => send(coordinator, {
     type: 'presence',
-    workers: [...workers].map(([id, { ready, backend, taskId }]) => ({ id, ready, backend, taskId })),
+    workers: [...workers].map(([id, { ready, backend, tasks }]) => ({ id, ready, backend, tasks })),
   });
   const upgrade = (request, socket, head) => {
     if (new URL(request.url, 'http://localhost').pathname !== '/swarm') return;
@@ -43,10 +43,11 @@ export function attachRelay(server) {
           send(socket, { type: 'welcome', id, role });
           presence();
         } else if (role === 'worker' && message.type === 'ready') {
-          if (!['webgl', 'cpu'].includes(message.backend) || typeof message.taskId !== 'string') {
-            throw new Error('Expected backend and task ID.');
+          if (!['webgl', 'cpu'].includes(message.backend) || !Array.isArray(message.tasks) ||
+              !message.tasks.every(task => typeof task === 'string')) {
+            throw new Error('Expected backend and supported task IDs.');
           }
-          Object.assign(workers.get(id), { ready: true, backend: message.backend, taskId: message.taskId });
+          Object.assign(workers.get(id), { ready: true, backend: message.backend, tasks: message.tasks });
           presence();
         } else if (role === 'coordinator' && message.type === 'step') {
           const worker = workers.get(message.to);

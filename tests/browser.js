@@ -21,6 +21,7 @@ try {
   assert.equal(await page.locator('#worker-count').textContent(), '0');
   assert.match(await page.locator('#role-note').textContent(), /one shared model/);
   assert.equal(await page.locator('label').filter({ has: page.locator('#batch-size') }).textContent(), 'Examples per step ');
+  assert.equal(await page.locator('#task').inputValue(), 'linear-function-v1');
 
   async function addWorker() {
     const worker = await browser.newPage();
