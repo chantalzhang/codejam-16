@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 
+// Saved runs go to a temporary folder, not the project's runs/.
+process.env.RUNS_DIR = await mkdtemp(join(tmpdir(), 'swarm-runs-'));
 const server = await createServer({ server: { host: '127.0.0.1', port: 0 } });
 await server.listen();
 let browser;
@@ -41,17 +43,21 @@ try {
       return cards.length === expected && cards.every(card => card.classList.contains('ready'));
     }, count);
   }
-  async function exportRun() {
-    await page.waitForFunction(() => !document.querySelector('#export').disabled, null, { timeout: 60_000 });
-    const downloaded = page.waitForEvent('download');
-    await page.locator('#export').click();
-    return JSON.parse(await readFile(await (await downloaded).path(), 'utf8'));
+  // Every finished run is saved automatically; read the newest one.
+  let lastSaved = '';
+  async function savedRun() {
+    await page.waitForFunction(previous => {
+      const text = document.querySelector('#saved').textContent;
+      return text.startsWith('Saved: ') && text !== previous;
+    }, lastSaved, { timeout: 60_000 });
+    lastSaved = await page.locator('#saved').textContent();
+    return JSON.parse(await readFile(lastSaved.slice('Saved: '.length), 'utf8'));
   }
   async function run(steps = 40, batchSize = 17) {
     await page.locator('#steps').fill(String(steps));
     await page.locator('#batch-size').fill(String(batchSize));
     await page.locator('#start').click();
-    const result = await exportRun();
+    const result = await savedRun();
     assert.equal(result.outcome, 'completed', result.reason);
     return result;
   }
@@ -94,12 +100,12 @@ try {
   await page.locator('#start').click();
   await page.waitForFunction(() => /^\d+ \//.test(document.querySelector('#step').textContent) && parseInt(document.querySelector('#step').textContent) >= 1);
   await page.locator('#stop').click();
-  assert.equal((await exportRun()).outcome, 'stopped');
+  assert.equal((await savedRun()).outcome, 'stopped');
 
   await page.locator('#start').click();
   await page.waitForFunction(() => parseInt(document.querySelector('#step').textContent) >= 1);
   await third.close();
-  const disconnected = await exportRun();
+  const disconnected = await savedRun();
   assert.equal(disconnected.outcome, 'stopped');
   assert.match(disconnected.reason, /disconnected/);
   await readyWorkers(2);
@@ -128,14 +134,14 @@ try {
     tf.backend().gpgpu.gl.getExtension('WEBGL_lose_context').loseContext();
   });
   await first.waitForFunction(() => /GPU reset/.test(document.querySelector('#worker-status').textContent));
-  const gpuReset = await exportRun();
+  const gpuReset = await savedRun();
   assert.ok(Date.now() - resetAt < 5_000, 'Run did not end promptly after a GPU reset');
   // Mid-step resets report "GPU reset"; resets between steps show up as a disconnect.
   assert.notEqual(gpuReset.outcome, 'completed');
   assert.match(gpuReset.reason, /GPU reset|disconnected/);
   await page.waitForFunction(() => /GPU reset/.test(document.querySelector('#workers .card.left .state')?.textContent));
   await readyWorkers(1);
-  await page.screenshot({ path: join(tmpdir(), 'swarm-laptop.png'), fullPage: true });
+  await page.screenshot({ path: join(process.env.RUNS_DIR, 'laptop.png'), fullPage: true });
 
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({
@@ -145,8 +151,8 @@ try {
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
     simulatedGpuReset: gpuReset.reason,
-    screenshot: join(tmpdir(), 'swarm-laptop.png'),
-    checks: 'Worker cards, equivalence, stop, disconnect, GPU reset, and image task passed.',
+    screenshot: join(process.env.RUNS_DIR, 'laptop.png'),
+    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, and image task passed.',
   }, null, 2));
 } finally {
   await browser?.close();

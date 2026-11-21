@@ -13,7 +13,7 @@ for (const { taskId, name } of tasks) $('task').add(new Option(name, taskId));
 let selected = tasks[0];
 let task, trainer, socket, backend;
 let connected = false, running = false;
-let workers = [], lastRun;
+let workers = [];
 
 const formatMs = ms => `${Math.round(ms)} ms`;
 const formatBytes = bytes => bytes < 2 ** 20 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 2 ** 20).toFixed(1)} MB`;
@@ -39,7 +39,6 @@ const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
 function refreshControls() {
   $('start').disabled = !connected || running || !workers.some(canRun);
   $('stop').disabled = !running;
-  $('export').disabled = running || !lastRun;
   $('task').disabled = $('steps').disabled = $('batch-size').disabled = running;
 }
 const TIMING_IDS = { stepMs: 'step-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
@@ -120,6 +119,18 @@ function showWorkers() {
 function snapshot(id) {
   const { number, device, backend, examples, computeMs, memory, error } = workerInfo(id);
   return { id, number, device, backend, examples, computeMs, memory, error };
+}
+
+async function saveRun(run) {
+  try {
+    const response = await fetch('/api/runs', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(run),
+    });
+    if (!response.ok) throw new Error();
+    $('saved').textContent = `Saved: ${(await response.json()).file}`;
+  } catch {
+    $('saved').textContent = 'Not saved. Open the laptop page at http://127.0.0.1 to save runs.';
+  }
 }
 
 // ---- Worker (phone) ----
@@ -254,7 +265,7 @@ $('start').addEventListener('click', async () => {
   const participants = workers.filter(canRun);
   running = true;
   resetModel();
-  lastRun = undefined;
+  $('saved').textContent = '';
   showWorkers();
   status(`Training one shared model with ${participants.length} worker(s)…`);
   try {
@@ -264,10 +275,10 @@ $('start').addEventListener('click', async () => {
     });
     const outcome = { completed: 'Completed', stopped: 'Stopped', failed: 'Failed' }[run.outcome];
     status(`${outcome}: ${run.history.at(-1)?.step ?? 0} of ${steps} steps.${run.reason ? ' ' + run.reason : ''}`);
-    lastRun = {
+    await saveRun({
       ...run, timing: timingSummary(run.history), workers: participants.map(worker => snapshot(worker.id)),
       coordinatorBackend: backend, userAgent: navigator.userAgent,
-    };
+    });
   } catch (error) {
     status(`Cannot start: ${error.message}`);
   } finally {
@@ -283,14 +294,6 @@ $('task').addEventListener('change', () => {
   status(`Selected: ${selected.name}.`);
 });
 $('stop').addEventListener('click', () => trainer.stop());
-$('export').addEventListener('click', () => {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(lastRun, null, 2)], { type: 'application/json' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `shared-training-${Date.now()}.json`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-});
 void initialize().catch(error => {
   $('connection').textContent = `Initialization failed: ${error.message}`;
 });
