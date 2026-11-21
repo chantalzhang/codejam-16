@@ -103,7 +103,7 @@ export class SharedTrainer {
     }
   }
 
-  async train({ workerIds, steps, batchSize, learningRate, timeoutMs = 10_000 }) {
+  async train({ workerIds, steps, batchSize, learningRate, timeoutMs = 30_000 }) {
     if (this.active) throw new Error('A run is already active.');
     if (!Number.isInteger(steps) || steps <= 0 ||
         !Number.isFinite(learningRate) || learningRate <= 0 ||
