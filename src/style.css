@@ -1,18 +1,30 @@
-:root { font: 14px/1.5 ui-monospace, monospace; color: #222; background: #fff; }
+:root { font: 14px/1.5 ui-monospace, monospace; color: #222; background: #f6f6f6; }
 body { margin: 24px; }
-main { max-width: 800px; }
-h1 { font-size: 20px; margin: 0 0 8px; }
-h2 { font-size: 14px; margin: 24px 0 8px; }
-nav, .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-.meta { color: #666; font-size: 12px; margin: 16px 0; }
-.meta p { margin: 4px 0; }
+main { max-width: 1100px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+h3 { font-size: 14px; margin: 16px 0 0; }
+small { color: #777; font-size: 12px; font-weight: normal; }
+#connection { color: #777; margin: 0; }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; align-items: start; }
+.panel { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 label { display: flex; align-items: center; gap: 8px; }
 input, button, select { font: inherit; }
-input { width: 80px; }
+input { width: 70px; }
 button { padding: 3px 10px; }
-.hint { color: #666; font-size: 12px; margin: -4px 0 16px; }
-.metrics { display: flex; flex-wrap: wrap; gap: 24px; margin: 20px 0; }
-.metrics dt { color: #555; font-size: 12px; }
-.metrics dd { margin: 4px 0 0; font-size: 18px; font-weight: bold; font-variant-numeric: tabular-nums; }
-ul { padding-left: 20px; }
+.hint { color: #777; font-size: 12px; margin: 8px 0; }
+.state { margin: 8px 0; font-weight: bold; }
+.metrics { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 12px 0; }
+.metrics dt { color: #777; font-size: 12px; }
+.metrics dd { margin: 2px 0 0; font-size: 18px; font-weight: bold; font-variant-numeric: tabular-nums; }
+.card { border: 1px solid #ddd; border-left: 4px solid #bbb; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
+.card h3 { margin: 0; }
+.card .metrics { margin: 6px 0 0; }
+.card .metrics dd { font-size: 15px; }
+.card.ready { border-left-color: #2e9e5b; }
+.card.busy { border-left-color: #d9a400; }
+.card.failed { border-left-color: #d64545; }
+.card.left { opacity: 0.55; }
 [hidden] { display: none !important; }
