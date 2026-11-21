@@ -39,6 +39,14 @@
           <div><dt>Loss (lower is better)</dt><dd id="loss">—</dd></div>
           <div><dt>Elapsed time</dt><dd id="elapsed">—</dd></div>
         </dl>
+        <h2>Average time per step</h2>
+        <dl class="metrics">
+          <div><dt>Total</dt><dd id="step-time">—</dd></div>
+          <div><dt>Slowest worker computing</dt><dd id="compute-time">—</dd></div>
+          <div><dt>Network + messaging</dt><dd id="network-time">—</dd></div>
+          <div><dt>Coordinator</dt><dd id="coordinator-time">—</dd></div>
+        </dl>
+        <p class="hint">Skips step 1 (GPU warm-up). Network = waiting for gradients minus the slowest worker's compute.</p>
         <h2>Connected workers (<span id="worker-count">0</span>)</h2>
         <ul id="workers"></ul>
       </section>

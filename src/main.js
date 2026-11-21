@@ -1,6 +1,6 @@
 import './style.css';
 import { initializeBackend } from './backend.js';
-import { SharedTrainer } from './shared-trainer.js';
+import { SharedTrainer, timingSummary } from './shared-trainer.js';
 import { assignValues, computeGradients } from './tensors.js';
 import { createTask, taskId, description, defaults } from './task.js';
 
@@ -32,10 +32,15 @@ function refreshControls() {
   $('export').disabled = running || !lastRun;
   $('steps').disabled = $('batch-size').disabled = running;
 }
-function showProgress(point) {
+const TIMING_IDS = { stepMs: 'step-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
+function showProgress(point, history) {
   $('step').textContent = point.step;
   $('loss').textContent = point.loss.toPrecision(5);
   $('elapsed').textContent = `${(point.elapsedMs / 1000).toFixed(2)}s`;
+  const timing = timingSummary(history);
+  for (const [key, id] of Object.entries(TIMING_IDS)) {
+    $(id).textContent = timing ? `${Math.round(timing[key])} ms` : '—';
+  }
 }
 function resetModel() {
   task?.dispose();
@@ -43,7 +48,7 @@ function resetModel() {
   trainer = new SharedTrainer(task, { send, onProgress: showProgress });
   lastRun = undefined;
   $('step').textContent = '0';
-  $('loss').textContent = $('elapsed').textContent = '—';
+  for (const id of ['loss', 'elapsed', ...Object.values(TIMING_IDS)]) $(id).textContent = '—';
 }
 function showWorkers() {
   $('workers').replaceChildren();
@@ -154,7 +159,10 @@ $('start').addEventListener('click', async () => {
       workerIds: participants.map(worker => worker.id), steps, batchSize,
       learningRate: defaults.learningRate,
     });
-    lastRun = { ...run, workers: participants, coordinatorBackend: backend, userAgent: navigator.userAgent };
+    lastRun = {
+      ...run, timing: timingSummary(run.history), workers: participants,
+      coordinatorBackend: backend, userAgent: navigator.userAgent,
+    };
     const outcome = { completed: 'Completed', stopped: 'Stopped', failed: 'Failed' }[run.outcome];
     status(`${outcome}: ${run.history.at(-1)?.step ?? 0} of ${steps} steps.${run.reason ? ' ' + run.reason : ''}`);
   } catch (error) {
