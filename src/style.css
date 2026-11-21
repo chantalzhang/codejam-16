@@ -1,0 +1,18 @@
+:root { font: 14px/1.5 ui-monospace, monospace; color: #222; background: #fff; }
+body { margin: 24px; }
+main { max-width: 800px; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h2 { font-size: 14px; margin: 24px 0 8px; }
+nav, .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.meta { color: #666; font-size: 12px; margin: 16px 0; }
+.meta p { margin: 4px 0; }
+label { display: flex; align-items: center; gap: 8px; }
+input, button { font: inherit; }
+input { width: 80px; }
+button { padding: 3px 10px; }
+.hint { color: #666; font-size: 12px; margin: -4px 0 16px; }
+.metrics { display: flex; flex-wrap: wrap; gap: 24px; margin: 20px 0; }
+.metrics dt { color: #555; font-size: 12px; }
+.metrics dd { margin: 4px 0 0; font-size: 18px; font-weight: bold; font-variant-numeric: tabular-nums; }
+ul { padding-left: 20px; }
+[hidden] { display: none !important; }
