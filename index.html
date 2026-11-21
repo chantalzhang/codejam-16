@@ -7,65 +7,59 @@
   </head>
   <body>
     <main>
-      <h1 id="role-title">Training dev</h1>
-      <nav>
-        <a href="/">Coordinator</a>
-        <a href="/?role=worker" target="_blank" rel="noopener">Open a worker tab</a>
-      </nav>
-      <p id="role-note"></p>
-
-      <div class="meta">
+      <header>
+        <h1 id="role-title">Training dev</h1>
         <p id="connection" role="status">Connecting…</p>
-        <p id="backend"></p>
-        <p id="task-note"></p>
+      </header>
+
+      <div id="coordinator" class="split" hidden>
+        <section class="panel">
+          <h2>Laptop <small>combines gradients into one model</small></h2>
+          <div class="controls">
+            <label>Task <select id="task"></select></label>
+            <label>Examples per step <input id="batch-size" type="number" min="1" max="100000" /></label>
+            <label>Steps <input id="steps" type="number" min="1" max="10000" /></label>
+          </div>
+          <p id="task-note" class="hint"></p>
+          <div class="controls">
+            <button id="start" disabled>Start fresh run</button>
+            <button id="stop" disabled>Stop</button>
+            <button id="export" disabled>Export JSON</button>
+          </div>
+          <p id="status" class="state" role="status" aria-live="polite">Open a worker, then start.</p>
+          <dl class="metrics">
+            <div><dt>Step</dt><dd id="step">—</dd></div>
+            <div><dt>Loss (lower is better)</dt><dd id="loss">—</dd></div>
+            <div><dt>Elapsed</dt><dd id="elapsed">—</dd></div>
+          </dl>
+          <h3>Time per step <small>average, skips warm-up step 1</small></h3>
+          <dl class="metrics">
+            <div><dt>Total</dt><dd id="step-time">—</dd></div>
+            <div><dt>Slowest worker</dt><dd id="compute-time">—</dd></div>
+            <div><dt>Network</dt><dd id="network-time">—</dd></div>
+            <div><dt>Laptop</dt><dd id="coordinator-time">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <h2>Workers (<span id="worker-count">0</span>)
+            <small><a href="/?role=worker" target="_blank" rel="noopener">open a worker tab</a></small>
+          </h2>
+          <div id="workers"></div>
+        </section>
       </div>
 
-      <section id="coordinator" hidden>
-        <p>Open worker tabs → return here → Start.</p>
-        <div class="controls">
-          <label>Task <select id="task"></select></label>
-        </div>
-        <div class="controls">
-          <label>Examples per step <input id="batch-size" type="number" min="1" max="100000" /></label>
-          <label>Steps to run <input id="steps" type="number" min="1" max="10000" /></label>
-        </div>
-        <p class="hint">Examples are split across workers. Each step updates the shared model once.</p>
-        <div class="controls">
-          <button id="start" title="Start with fresh model weights" disabled>Start fresh run</button>
-          <button id="stop" disabled>Stop</button>
-          <button id="reset" disabled>Reset</button>
-          <button id="export" disabled>Export JSON</button>
-        </div>
-        <p id="status" role="status" aria-live="polite">Open a worker tab, then start.</p>
+      <section id="worker" class="panel" hidden>
+        <h2>Worker <small>computes gradients on its share of each step</small></h2>
+        <p id="worker-status" class="state" role="status">Waiting for the laptop to start a run.</p>
         <dl class="metrics">
-          <div><dt>Steps completed</dt><dd id="step">0</dd></div>
-          <div><dt>Loss (lower is better)</dt><dd id="loss">—</dd></div>
-          <div><dt>Elapsed time</dt><dd id="elapsed">—</dd></div>
+          <div><dt>Examples this run</dt><dd id="examples">0</dd></div>
+          <div><dt>Last compute</dt><dd id="compute">—</dd></div>
+          <div><dt>GPU memory</dt><dd id="gpu-memory">—</dd></div>
+          <div><dt>Tensors</dt><dd id="tensors">—</dd></div>
         </dl>
-        <h2>Average time per step</h2>
-        <dl class="metrics">
-          <div><dt>Total</dt><dd id="step-time">—</dd></div>
-          <div><dt>Slowest worker computing</dt><dd id="compute-time">—</dd></div>
-          <div><dt>Network + messaging</dt><dd id="network-time">—</dd></div>
-          <div><dt>Coordinator</dt><dd id="coordinator-time">—</dd></div>
-        </dl>
-        <p class="hint">Skips step 1 (GPU warm-up). Network = waiting for gradients minus the slowest worker's compute.</p>
-        <h2>Connected workers (<span id="worker-count">0</span>)</h2>
-        <ul id="workers"></ul>
+        <p class="hint">Keep this tab open and the screen on. The laptop shows these numbers too.</p>
       </section>
-
-      <section id="worker" hidden>
-        <p id="worker-status" role="status">Waiting for an assignment.</p>
-        <dl class="metrics">
-          <div><dt>Examples processed this run</dt><dd id="examples">0</dd></div>
-          <div><dt title="Batch preparation, gradient computation and readback; excludes network time">Last compute time</dt><dd id="compute">—</dd></div>
-          <div><dt title="GPU memory TF.js holds after the last step. Should stay flat across steps.">GPU memory</dt><dd id="gpu-memory">—</dd></div>
-          <div><dt title="Live tensors after the last step. Should stay flat across steps.">Tensors</dt><dd id="tensors">—</dd></div>
-        </dl>
-        <p class="meta">Start the run in the coordinator tab. Keep this worker tab visible.</p>
-      </section>
-
-      <p class="meta">Local tabs share hardware. Use real devices for speed tests.</p>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>
