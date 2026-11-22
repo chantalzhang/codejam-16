@@ -7,6 +7,7 @@ import { decode } from '../src/image-task.js';
 import fashion from '../src/fashion-task.js';
 import games from '../src/games-task.js';
 import brainrot from '../src/brainrot-task.js';
+import { guessOf } from '../src/ui/predictions.js';
 import { SharedTrainer, timingSummary } from '../src/shared-trainer.js';
 import { createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
 import { createRelay } from '../server/relay-core.js';
@@ -136,6 +137,12 @@ test('image task files decode, with balanced game slices and 4 held-out display 
   assert.throws(() => decode(new Uint8Array(100), 28, 1), /file size/);
   // Workers take slices in join order, wrapping around.
   assert.deepEqual([0, 4, 5, 6].map(fashion.sliceFor), [0, 4, 0, 1]);
+});
+
+test('the shown guess is "?" while the top class is barely above chance', () => {
+  assert.equal(guessOf([0.15, 0.13, 0.12, 0.12, 0.12, 0.12, 0.12, 0.06, 0.06]), -1); // 9 classes: chance 11%
+  assert.equal(guessOf([0.05, 0.6, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]), 1);
+  assert.equal(guessOf([0.31, 0.2, 0.2, 0.15, 0.14]), 0); // 5 classes: 31% is over 1.5x chance (30%)
 });
 
 test('timing summary skips warm-up and splits each round into compute, network, and coordinator time', () => {

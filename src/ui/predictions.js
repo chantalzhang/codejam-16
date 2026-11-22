@@ -7,7 +7,12 @@ const element = (tag, className, text) => {
   if (text !== undefined) node.textContent = text;
   return node;
 };
-const winner = probabilities => probabilities.indexOf(Math.max(...probabilities));
+// The model's guess, or -1 ("?") while its top class is barely above chance, e.g. the
+// untrained model, whose top class is just whichever its starting weights happen to favor.
+export function guessOf(probabilities) {
+  const top = Math.max(...probabilities);
+  return top < 1.5 / probabilities.length ? -1 : probabilities.indexOf(top);
+}
 
 // A card's static parts: actual class, image, and slots for the live prediction.
 export function createCard({ label, url }, classNames) {
@@ -37,20 +42,20 @@ export function createCard({ label, url }, classNames) {
 // each time it changed, starting with the untrained model's (see guessChanges).
 export function updateCard(card, probabilities, guesses, classNames, { done = false } = {}) {
   const label = Number(card.dataset.label);
-  const guess = winner(probabilities);
+  const guess = guessOf(probabilities);
   const correct = guess === label;
-  card.classList.toggle('wrong', !correct);
-  card.querySelector('.prediction-name').textContent = classNames[guess];
-  card.querySelector('.prediction-result').textContent = correct ? '✓ Correct' : '× Incorrect';
+  const name = index => index < 0 ? '?' : classNames[index];
+  const tone = index => index < 0 ? 'is-unsure' : index === label ? 'is-correct' : 'is-wrong';
+  card.classList.toggle('wrong', guess >= 0 && !correct);
+  card.classList.toggle('unsure', guess < 0);
+  card.querySelector('.prediction-name').textContent = name(guess);
+  card.querySelector('.prediction-result').textContent = guess < 0 ? 'Not sure yet' : correct ? '✓ Correct' : '× Incorrect';
   // The latest time the guess changed, e.g. "Shirt → Trouser".
   const transition = card.querySelector('.prediction-transition');
   transition.replaceChildren();
   if (guesses.length > 1) {
     const [from, to] = guesses.slice(-2);
-    transition.append(
-      element('span', from === label ? 'is-correct' : 'is-wrong', classNames[from]),
-      element('span', 'transition-arrow', ' → '),
-      element('span', to === label ? 'is-correct' : 'is-wrong', classNames[to]));
+    transition.append(element('span', tone(from), name(from)), element('span', 'transition-arrow', ' → '), element('span', tone(to), name(to)));
   } else {
     transition.textContent = 'No change yet';
   }
@@ -59,11 +64,11 @@ export function updateCard(card, probabilities, guesses, classNames, { done = fa
   const comparison = card.querySelector('.prediction-comparison');
   comparison.hidden = !done;
   const first = card.querySelector('.first-guess');
-  first.textContent = classNames[guesses[0]];
-  first.className = `first-guess ${guesses[0] === label ? 'is-correct' : 'is-wrong'}`;
+  first.textContent = name(guesses[0]);
+  first.className = `first-guess ${tone(guesses[0])}`;
   const final = card.querySelector('.final-guess');
-  final.textContent = classNames[guess];
-  final.className = `final-guess ${correct ? 'is-correct' : 'is-wrong'}`;
+  final.textContent = name(guess);
+  final.className = `final-guess ${tone(guess)}`;
   const scores = card.querySelector('.class-scores');
   if (scores) {
     // The four likeliest classes, always including the actual one.
@@ -111,9 +116,8 @@ export function resultSummary(initialCorrect, finalCorrect, total) {
 // One image's guesses over evaluations, kept only where they changed. Phones get just the
 // first and last two, which is all a card shows.
 export function guessChanges(history, image) {
-  const guesses = history.map(evaluation => winner(evaluation[image]));
+  const guesses = history.map(evaluation => guessOf(evaluation[image]));
   const changes = guesses.filter((value, i) => i === 0 || value !== guesses[i - 1]);
   return changes.length > 3 ? [changes[0], ...changes.slice(-2)] : changes;
 }
 
-export { winner };
