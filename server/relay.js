@@ -43,7 +43,7 @@ export function attachRelay(server) {
           send(socket, { type: 'welcome', id, role });
           presence();
         } else if (role === 'worker' && message.type === 'ready') {
-          if (!['webgl', 'cpu'].includes(message.backend) || !Array.isArray(message.tasks) ||
+          if (!['webgl', 'webgpu', 'cpu'].includes(message.backend) || !Array.isArray(message.tasks) ||
               !message.tasks.every(task => typeof task === 'string')) {
             throw new Error('Expected backend and supported task IDs.');
           }

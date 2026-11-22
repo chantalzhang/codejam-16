@@ -1,10 +1,17 @@
 import * as tf from '@tensorflow/tfjs';
+import '@tensorflow/tfjs-backend-webgpu';
 
+export const BACKENDS = ['webgl', 'webgpu', 'cpu'];
+export const backendLabel = name => ({ webgl: 'WebGL', webgpu: 'WebGPU', cpu: 'CPU (not GPU)' })[name] ?? name;
+
+// Tries the preferred backend, then WebGL, then CPU.
 export async function initializeBackend(preferred) {
-  try {
-    if (!await tf.setBackend(preferred)) throw new Error('Backend unavailable');
-  } catch {
-    await tf.setBackend('cpu');
+  for (const name of new Set([preferred, 'webgl', 'cpu'])) {
+    try {
+      if (await tf.setBackend(name)) break;
+    } catch {
+      // Not available in this browser; try the next one.
+    }
   }
   await tf.ready();
   return tf.getBackend();
@@ -19,6 +26,6 @@ export function onGpuReset(callback) {
 }
 
 export function memoryUsage() {
-  const { numTensors, numBytesInGPUAllocated = 0 } = tf.memory();
-  return { tensors: numTensors, gpuBytes: numBytesInGPUAllocated };
+  const { numTensors, numBytesInGPUAllocated, numBytesAllocatedInGPU } = tf.memory(); // WebGL, WebGPU names
+  return { tensors: numTensors, gpuBytes: numBytesInGPUAllocated ?? numBytesAllocatedInGPU ?? 0 };
 }
