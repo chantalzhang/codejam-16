@@ -75,6 +75,8 @@ h1 { font-size: 22px; font-weight: 500; letter-spacing: -.4px; margin: 0; }
 .prediction-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; border-top: 1px solid var(--line); padding-top: 13px; }
 .prediction-sample { --prediction-color: var(--green); min-width: 0; }
 .prediction-sample.wrong { --prediction-color: var(--red); }
+.prediction-sample.unsure { --prediction-color: #8f9ba4; }
+.prediction-sample.unsure .prediction-result { background: #8f9ba418; }
 .prediction-actual { color: #b1c0ca; display: block; font-size: 12px; margin-bottom: 10px; }
 .item-art { height: 132px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #192126; border: 1px solid #2c393f; border-bottom: 2px solid var(--prediction-color); }
 .item-art img { height: 100%; aspect-ratio: 1; image-rendering: pixelated; }
@@ -100,6 +102,7 @@ h1 { font-size: 22px; font-weight: 500; letter-spacing: -.4px; margin: 0; }
 .prediction-comparison dd { margin: 0; font-size: clamp(16px, 1.5vw, 22px); letter-spacing: -.3px; line-height: 1.2; overflow-wrap: anywhere; }
 .is-wrong { color: var(--red); }
 .is-correct { color: var(--green); }
+.is-unsure { color: #8f9ba4; }
 .prediction-comparison .first-guess { font-size: 14px; }
 [hidden] { display: none !important; }
 .run-info { border-left: 1px solid var(--line); padding-left: 24px; padding-top: 3px; }

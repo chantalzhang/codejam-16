@@ -7,7 +7,7 @@ import { tasks } from './tasks.js';
 import { clock, drawLossChart, drawProbabilityHistory, drawRateSparkline } from './ui/charts.js';
 import { imageUrl } from './ui/images.js';
 import { bump, countTo } from './ui/motion.js';
-import { createCard, guessChanges, resultSummary, updateCard, winner } from './ui/predictions.js';
+import { createCard, guessChanges, guessOf, resultSummary, updateCard } from './ui/predictions.js';
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -117,7 +117,7 @@ function refreshControls() {
 }
 const TIMING_IDS = { roundMs: 'round-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
 const readyPhones = () => workers.filter(canRun).length;
-const correctCount = evaluation => evaluation.filter((probabilities, i) => winner(probabilities) === screen.display.examples[i].label).length;
+const correctCount = evaluation => evaluation.filter((probabilities, i) => guessOf(probabilities) === screen.display.examples[i].label).length;
 
 // The room's measured training speed: examples per second over the last 3 rounds,
 // skipping round 1 (downloads and GPU warm-up).
