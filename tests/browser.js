@@ -35,6 +35,8 @@ try {
     await worker.goto(`${base}?role=worker&backend=${backend}`);
     await worker.waitForFunction(() => document.querySelector('#connection').textContent.startsWith('Connected'));
     assert.equal(await worker.locator('#role-title').textContent(), 'Shared training · worker');
+    await worker.waitForFunction(() => /screen/i.test(document.querySelector('#screen').textContent) &&
+      document.querySelector('#screen').textContent !== 'Keep this tab open and the screen on.');
     return worker;
   }
   // Cards of workers that left stay visible (faded), so only count connected ones.
