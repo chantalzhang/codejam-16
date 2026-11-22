@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
 import * as imageTask from '../src/image-task.js';
+import { decode } from '../src/fashion-task.js';
+import { readFile } from 'node:fs/promises';
 import { SharedTrainer, splitBatch, averageGradients, timingSummary } from '../src/shared-trainer.js';
 import { assignValues, computeGradients, readValues } from '../src/tensors.js';
 
@@ -68,6 +70,16 @@ test('image task gives identical batches however they are split, and computes fi
     assert.ok(Number.isFinite(await task.evaluate()));
   } finally { task.dispose(); }
   assert.equal(tf.memory().numTensors, before);
+});
+
+test('Fashion-MNIST files decode into images with valid labels', async () => {
+  for (const [file, count] of [['fashion-train.bin', 10_000], ['fashion-test.bin', 1_000]]) {
+    const data = decode(new Uint8Array(await readFile(`public/data/${file}`)));
+    assert.equal(data.count, count);
+    assert.equal(data.pixels.length, count * 784);
+    assert.ok(data.labels.every(label => label < 10));
+  }
+  assert.throws(() => decode(new Uint8Array(100)), /file size/);
 });
 
 test('timing summary skips warm-up and splits each step into compute, network, and coordinator time', () => {

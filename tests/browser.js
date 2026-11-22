@@ -25,7 +25,7 @@ try {
   assert.equal(await page.locator('#start').isDisabled(), true);
   assert.equal(await page.locator('#worker-count').textContent(), '0');
   assert.equal(await page.locator('label').filter({ has: page.locator('#batch-size') }).textContent(), 'Examples per step ');
-  assert.equal(await page.locator('#task').inputValue(), 'image-benchmark-v1');
+  assert.equal(await page.locator('#task').inputValue(), 'fashion-mnist-v1');
   await page.locator('#task').selectOption('linear-function-v1');
 
   async function addWorker() {
@@ -117,6 +117,12 @@ try {
   await page.locator('#task').selectOption('image-benchmark-v1');
   const image = await run(3, 8);
   assert.equal(image.taskId, 'image-benchmark-v1');
+
+  // Short Fashion-MNIST run: workers download data, the laptop reports accuracy.
+  await page.locator('#task').selectOption('fashion-mnist-v1');
+  const fashion = await run(3, 8);
+  assert.ok(fashion.history.every(point => point.accuracy >= 0 && point.accuracy <= 1));
+  assert.match(await page.locator('#accuracy').textContent(), /^\d+\.\d%$/);
   assert.equal(image.timing.steps, 2);
   assert.ok(Object.values(image.timing).every(Number.isFinite));
 

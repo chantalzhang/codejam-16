@@ -119,10 +119,12 @@ export class SharedTrainer {
     const started = performance.now();
     const checkCancelled = () => { if (run.cancelReason) throw new Error(run.cancelReason); };
     const record = async (step, updates = [], waitMs = 0) => {
-      const loss = await this.task.evaluate();
+      // Tasks return a loss, or { loss, accuracy }.
+      const evaluation = await this.task.evaluate();
+      const { loss, accuracy } = typeof evaluation === 'number' ? { loss: evaluation } : evaluation;
       checkCancelled();
       if (!Number.isFinite(loss)) throw new Error('Evaluation loss is not finite.');
-      const point = { step, loss, elapsedMs: performance.now() - started, waitMs, updates };
+      const point = { step, loss, accuracy, elapsedMs: performance.now() - started, waitMs, updates };
       run.history.push(point);
       this.onProgress(point, run.history);
     };
