@@ -13,6 +13,6 @@ export default imageTask({
   // From ml/sim.py: Adam needs far fewer steps than SGD, and syncing every 10 steps was fastest.
   defaults: {
     rounds: 1000, batchSize: 32, localSteps: 10, optimizer: 'adam', learningRate: 0.01,
-    outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: 0.8, timeLimitSeconds: 120,
+    outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: null, timeLimitSeconds: 50,
   },
 });

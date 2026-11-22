@@ -1,7 +1,7 @@
 import { imageTask } from './image-task.js';
 
 // Data: ml/prepare_brainrot.py, then uv run ml/export_images.py brainrot. Only ~120 images
-// per character, so it tops out around 60%, hence the lower target.
+// per character, so it tops out around 60%.
 export default imageTask({
   taskId: 'italian-brainrot-v1',
   name: 'Italian brainrot',
@@ -14,6 +14,6 @@ export default imageTask({
   slices: 1,
   defaults: {
     rounds: 1000, batchSize: 32, localSteps: 10, optimizer: 'adam', learningRate: 0.01,
-    outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: 0.5, timeLimitSeconds: 120,
+    outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: null, timeLimitSeconds: 50,
   },
 });
