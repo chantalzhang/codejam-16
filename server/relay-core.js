@@ -13,7 +13,7 @@ export function allowedOrigin(origin, host) {
 
 export function createRelay() {
   const workers = new Map(); // id → { send, ready, backend, tasks, device, note }
-  let coordinator = null; // { id, send }
+  let coordinator = null; // { id, send, demote }
   let pending = null; // The round in progress, see startRound.
   let workersJoined = 0; // Gives each worker a join number, e.g. to pick a data slice.
   let lastStatus = null; // The laptop's latest status for phones, also sent to new joiners.
@@ -79,6 +79,16 @@ export function createRelay() {
     settleRound();
   }
 
+  // The laptop left or another laptop tab took over: the round in progress is lost, and
+  // phones wait for the next laptop.
+  function coordinatorLeft() {
+    coordinator = null;
+    lastStatus = null;
+    if (pending) clearTimeout(pending.timer);
+    pending = null;
+    for (const worker of workers.values()) worker.send({ type: 'coordinator-left' });
+  }
+
   function settleRound() {
     if (pending && pending.answered.size === pending.expected.size) finishRound();
   }
@@ -111,9 +121,14 @@ export function createRelay() {
           if (message.type !== 'join' || !['coordinator', 'worker'].includes(message.role)) {
             throw new Error('Join as coordinator or worker first.');
           }
-          if (message.role === 'coordinator' && coordinator) throw new Error('A coordinator is already connected.');
+          // A new laptop tab (e.g. after a reload) takes over from the old one.
+          if (message.role === 'coordinator' && coordinator) {
+            coordinator.send({ type: 'replaced' });
+            coordinator.demote();
+            coordinatorLeft();
+          }
           role = message.role;
-          if (role === 'coordinator') coordinator = { id, send };
+          if (role === 'coordinator') coordinator = { id, send, demote: () => { role = 'replaced'; } };
           else workers.set(id, { send, ready: false });
           send({ type: 'welcome', id, role, ...(role === 'worker' && { joinNumber: workersJoined++ }) });
           if (role === 'worker' && lastStatus) send(lastStatus);
@@ -152,13 +167,7 @@ export function createRelay() {
     function disconnect() {
       if (!connected) return;
       connected = false;
-      if (coordinator?.id === id) {
-        coordinator = null;
-        lastStatus = null;
-        if (pending) clearTimeout(pending.timer);
-        pending = null;
-        for (const worker of workers.values()) worker.send({ type: 'coordinator-left' });
-      }
+      if (coordinator?.id === id) coordinatorLeft();
       dropWorker(id, 'left');
       workers.delete(id);
       presence();

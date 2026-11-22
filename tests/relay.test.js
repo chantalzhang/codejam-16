@@ -80,8 +80,6 @@ test('relay fans out rounds, adds up updates, assigns identity, and limits roles
   assert.equal(failure.workerId, welcome.id);
   assert.equal(failure.error, 'Computation failed');
 
-  const secondCoordinator = await connect(url, 'coordinator');
-  assert.match((await secondCoordinator.next('error')).error, /already connected/);
   worker.send({ type: 'round', to: welcome.id });
   assert.match((await worker.next('error')).error, /not allowed/);
   coordinator.socket.send('{broken json');
@@ -98,6 +96,19 @@ test('relay fans out rounds, adds up updates, assigns identity, and limits roles
   await remainingWorker.next('welcome');
   coordinator.socket.close();
   assert.equal((await remainingWorker.next('coordinator-left')).type, 'coordinator-left');
+
+  // A second laptop tab takes over: the old one is told, and can no longer send rounds.
+  const laptop = await connect(url, 'coordinator');
+  await laptop.next('welcome');
+  const reloaded = await connect(url, 'coordinator');
+  await reloaded.next('welcome');
+  assert.equal((await laptop.next('replaced')).type, 'replaced');
+  assert.equal((await remainingWorker.next('coordinator-left')).type, 'coordinator-left');
+  laptop.send({ type: 'round', runId: 'run', round: 1, localSteps: 1, deadlineMs: 5000, weights, assignments: [] });
+  assert.match((await laptop.next('error')).error, /not allowed/);
+  laptop.socket.close();
+  reloaded.send({ type: 'status', state: 'waiting', phones: 1 });
+  assert.equal((await remainingWorker.next('status')).phones, 1, 'The new laptop still reaches phones');
 });
 
 test('relay rejects cross-origin browser connections', async t => {
