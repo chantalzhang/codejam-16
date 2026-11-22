@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
-import * as imageTask from '../src/image-task.js';
-import { classes, decode, sliceFor } from '../src/fashion-task.js';
-import { decode as decodeColor } from '../src/color-image-task.js';
+import { decode } from '../src/image-task.js';
+import fashion from '../src/fashion-task.js';
 import games from '../src/games-task.js';
 import brainrot from '../src/brainrot-task.js';
 import { SharedTrainer, timingSummary } from '../src/shared-trainer.js';
@@ -13,6 +12,8 @@ import { createOptimizer, packValues, readValues, trainLocally, unpackValues } f
 import { createRelay } from '../server/relay-core.js';
 
 await tf.setBackend('cpu');
+// Image tasks fetch /data/…; serve it from public/ like the dev server does.
+globalThis.fetch = async url => new Response(await readFile(`public${url}`));
 
 function closeTo(actual, expected, tolerance = 1e-5) {
   assert.ok(Math.abs(actual - expected) < tolerance, `${actual} != ${expected}`);
@@ -95,12 +96,12 @@ async function simulate(workerCount, { rounds = 40, batchSize = 17, localSteps =
 
 test('image task gives identical batches however they are split, and trains to finite values', async () => {
   const before = tf.memory().numTensors;
-  const task = imageTask.createTask();
+  const task = games.createTask({ joinNumber: 0 });
   const optimizer = createOptimizer('sgd', 0.1);
   try {
-    assert.equal(task.variables.reduce((sum, variable) => sum + variable.size, 0), 6020);
-    const whole = task.makeBatch({ step: 3, offset: 0, count: 6 });
-    const parts = [task.makeBatch({ step: 3, offset: 0, count: 2 }), task.makeBatch({ step: 3, offset: 2, count: 4 })];
+    assert.equal(task.variables.reduce((sum, variable) => sum + variable.size, 0), 6329);
+    const whole = await task.makeBatch({ step: 3, offset: 0, count: 6 });
+    const parts = [await task.makeBatch({ step: 3, offset: 0, count: 2 }), await task.makeBatch({ step: 3, offset: 2, count: 4 })];
     for (const key of ['xs', 'ys']) {
       const joined = tf.concat(parts.map(part => part[key]));
       assert.deepEqual(await joined.data(), await whole[key].data());
@@ -110,47 +111,31 @@ test('image task gives identical batches however they are split, and trains to f
     const weights = await readValues(task.variables);
     const update = await trainLocally(task, optimizer, weights, { firstStep: 1, localSteps: 2, offset: 0, count: 4 });
     assert.ok(update.delta.flat().every(Number.isFinite));
-    assert.ok(Number.isFinite(await task.evaluate()));
+    const { loss, accuracy } = await task.evaluate();
+    assert.ok(Number.isFinite(loss) && accuracy >= 0 && accuracy <= 1);
+    assert.equal((await task.predictDisplay()).length, 4);
   } finally { task.dispose(); optimizer.dispose(); }
+  await new Promise(resolve => setImmediate(resolve)); // dispose() frees the test images once they've loaded.
   assert.equal(tf.memory().numTensors, before);
 });
 
-test('Fashion-MNIST files decode into images with valid labels', async () => {
-  const slices = [0, 1, 2, 3, 4].map(i => [`fashion-train-${i}.bin`, 2_000]);
-  for (const [file, count] of [...slices, ['fashion-test.bin', 1_000]]) {
-    const data = decode(new Uint8Array(await readFile(`public/data/${file}`)));
-    assert.equal(data.count, count);
-    assert.equal(data.pixels.length, count * 784);
-    assert.ok(data.labels.every(label => label < 10));
-  }
-  assert.throws(() => decode(new Uint8Array(100)), /file size/);
-  // Workers take slices in join order; the 6th worker wraps back to slice 0.
-  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map(sliceFor), [0, 1, 2, 3, 4, 0, 1]);
-  // Four held-out images to show on screen: ankle boot, trouser, bag, shirt.
-  const display = decode(new Uint8Array(await readFile('public/data/fashion-display.bin')));
-  assert.deepEqual(Array.from(display.labels, label => classes[label]), ['Ankle boot', 'Trouser', 'Bag', 'Shirt']);
-});
-
-test('Guess the game files decode, and every training slice has the same number of each game', async () => {
+test('image task files decode, with balanced game slices and 4 held-out display images each', async () => {
+  const load = async (task, suffix, size, channels) => decode(new Uint8Array(await readFile(`public/data/${suffix}.bin`)), size, channels);
+  for (let slice = 0; slice < 5; slice++) assert.equal((await load(fashion, `fashion-train-${slice}`, 28, 1)).count, 2_000);
   for (let slice = 0; slice < 10; slice++) {
-    const data = decodeColor(new Uint8Array(await readFile(`public/data/games-train-${slice}.bin`)));
-    const counts = games.classes.map((_, c) => data.labels.filter(label => label === c).length);
-    assert.deepEqual(counts, games.classes.map(() => 111));
+    const { labels } = await load(games, `games-train-${slice}`, 32, 3);
+    assert.deepEqual(games.classes.map((_, c) => labels.filter(label => label === c).length), games.classes.map(() => 111));
   }
-  const test = decodeColor(new Uint8Array(await readFile('public/data/games-test.bin')));
-  assert.ok(test.count > 800 && test.labels.every(label => label < games.classes.length));
-  const display = decodeColor(new Uint8Array(await readFile('public/data/games-display.bin')), 64);
-  assert.deepEqual(Array.from(display.labels, label => games.classes[label]), ['Minecraft', 'Fortnite', 'Among Us', 'CS2']);
-  assert.deepEqual([0, 9, 10].map(games.sliceFor), [0, 9, 0]);
-});
-
-test('brainrot files decode into one balanced slice, held-out test images, and 4 display images', async () => {
-  const train = decodeColor(new Uint8Array(await readFile('public/data/brainrot-train-0.bin')));
-  assert.deepEqual(brainrot.classes.map((_, c) => train.labels.filter(label => label === c).length), [122, 122, 122, 122, 122]);
-  const test = decodeColor(new Uint8Array(await readFile('public/data/brainrot-test.bin')));
-  assert.ok(test.count > 150 && test.labels.every(label => label < brainrot.classes.length));
-  const display = decodeColor(new Uint8Array(await readFile('public/data/brainrot-display.bin')), 64);
-  assert.equal(display.count, 4);
+  for (const [task, file, size, channels, displaySize] of [[fashion, 'fashion', 28, 1, 28], [games, 'games', 32, 3, 64], [brainrot, 'brainrot', 32, 3, 64]]) {
+    const { labels } = await load(task, `${file}-test`, size, channels);
+    assert.ok(labels.length > 150 && labels.every(label => label < task.classes.length));
+    assert.equal((await task.displayExamples()).length, 4);
+    assert.equal((await load(task, `${file}-display`, displaySize, channels)).count, 4);
+  }
+  assert.deepEqual((await games.displayExamples()).map(({ label }) => games.classes[label]), ['Minecraft', 'Fortnite', 'Among Us', 'CS2']);
+  assert.throws(() => decode(new Uint8Array(100), 28, 1), /file size/);
+  // Workers take slices in join order, wrapping around.
+  assert.deepEqual([0, 4, 5, 6].map(fashion.sliceFor), [0, 4, 0, 1]);
 });
 
 test('timing summary skips warm-up and splits each round into compute, network, and coordinator time', () => {
@@ -165,7 +150,7 @@ test('timing summary skips warm-up and splits each round into compute, network, 
 });
 
 test('packed weights round-trip exactly, are ~4x smaller than JSON, and reject the wrong size', async () => {
-  const task = imageTask.createTask();
+  const task = games.createTask();
   try {
     const weights = await readValues(task.variables);
     const packed = packValues(weights);

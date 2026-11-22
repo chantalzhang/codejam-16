@@ -4,7 +4,7 @@
 # ///
 """Simulate local SGD on N phones, comparing ways to combine their updates.
 
-Fashion-MNIST stands in for the final demo task. Same model and batch size as the
+Uses Fashion-MNIST, with the same model and batch size as the
 phone task. Each round, every simulated phone trains its own copy of the model for K
 steps with Adam (keeping its optimizer state between rounds). The laptop then treats
 "shared model minus the average of the copies" as a gradient for an outer optimizer

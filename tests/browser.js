@@ -137,14 +137,6 @@ try {
   await run(3); // Old in-flight updates must not contaminate this new run.
   assert.equal(await page.locator('#workers .card.left').count(), 0);
 
-  // Small image-task run on software WebGL: checks the CNN path and timing breakdown.
-  await page.locator('#task').selectOption('image-benchmark-v1');
-  const image = await run(3, 8);
-  assert.equal(image.taskId, 'image-benchmark-v1');
-
-  assert.equal(image.timing.rounds, 2);
-  assert.ok(Object.values(image.timing).every(Number.isFinite));
-
   // Short Fashion-MNIST run with local SGD: Adam, 2 local steps per round, accuracy reported.
   await page.locator('#task').selectOption('fashion-mnist-v1');
   const fashion = await run(3, 8, 2);
@@ -154,10 +146,13 @@ try {
   assert.ok(fashion.history.every(point => point.accuracy >= 0 && point.accuracy <= 1));
   assert.match(await page.locator('#accuracy').textContent(), /^\d+\.\d%$/);
 
-  // Short Guess the game run: color images train, and the 4 display images get predictions.
+  // Short Guess the game run on software WebGL: the CNN trains on color images, the 4
+  // display images get predictions, and each round's time is broken down.
   await page.locator('#task').selectOption('guess-the-game-v1');
   const games = await run(3, 8, 2);
   assert.ok(games.history.every(point => point.accuracy >= 0 && point.accuracy <= 1 && point.display.length === 4));
+  assert.equal(games.timing.rounds, 2);
+  assert.ok(Object.values(games.timing).every(Number.isFinite));
   assert.equal(await page.locator('#predictions .prediction-sample').count(), 4);
   await page.locator('#task').selectOption('fashion-mnist-v1');
 
@@ -165,14 +160,14 @@ try {
   await page.locator('#target').fill('20');
   const early = await run(50, 8, 2);
   assert.ok(early.reachedTarget && early.history.length < 51, 'Run did not stop at the target');
-  assert.match(await page.locator('#result').textContent(), /^Reached \d+\.\d% accuracy in \d+\.\d s with 2 phones$/);
+  assert.match(await page.locator('#result').textContent(), /^Reached \d+\.\d% held-out accuracy in \d+\.\d s with 2 phones$/);
   await page.locator('#target').fill('');
 
   // Without a target, the time limit ends the run.
   await page.locator('#time-limit').fill('2');
   const timed = await run(1000, 8, 2);
   assert.ok(timed.timeUp && timed.history.length < 1001);
-  assert.match(await page.locator('#result').textContent(), /^Time's up: \d+\.\d% accuracy after \d+\.\d s with 2 phones$/);
+  assert.match(await page.locator('#result').textContent(), /^Time's up: \d+\.\d% held-out accuracy after \d+\.\d s with 2 phones$/);
   await page.locator('#time-limit').fill('');
 
   // Simulate a phone GPU reset mid-run: that worker drops out and the run keeps going.
@@ -224,7 +219,7 @@ try {
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
     screenshot: join(process.env.RUNS_DIR, 'laptop.png'),
-    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, and image task passed.',
+    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, and image tasks passed.',
   }, null, 2));
 } finally {
   await browser?.close();
