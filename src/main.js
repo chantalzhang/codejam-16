@@ -1,7 +1,7 @@
 import './style.css';
 import { BACKENDS, backendLabel, initializeBackend, memoryUsage, onGpuReset } from './backend.js';
 import { SharedTrainer, timingSummary } from './shared-trainer.js';
-import { createOptimizer, trainLocally } from './tensors.js';
+import { createOptimizer, packValues, trainLocally, unpackValues } from './tensors.js';
 import { tasks } from './tasks.js';
 
 const $ = id => document.getElementById(id);
@@ -169,14 +169,15 @@ async function work(message) {
     workerRun = { id: message.runId, optimizer: createOptimizer(message.optimizer, message.learningRate), examples: 0 };
   }
   $('worker-status').textContent = `Round ${round}: training ${localSteps} step${localSteps > 1 ? 's' : ''}…`;
-  const result = await trainLocally(task, workerRun.optimizer, message.weights, message);
+  const weights = unpackValues(message.weights, task.variables);
+  const result = await trainLocally(task, workerRun.optimizer, weights, message);
   const memory = memoryUsage();
   workerRun.examples += count * localSteps;
   $('examples').textContent = workerRun.examples;
   $('compute').textContent = formatMs(result.computeMs);
   $('gpu-memory').textContent = formatBytes(memory.gpuBytes);
   $('tensors').textContent = memory.tensors;
-  send({ type: 'update', runId: message.runId, round, count: count * localSteps, memory, ...result });
+  send({ type: 'update', runId: message.runId, round, count: count * localSteps, memory, ...result, delta: packValues(result.delta) });
   currentRound = undefined;
   $('worker-status').textContent = `Round ${round} sent. Waiting for the next one.`;
 }

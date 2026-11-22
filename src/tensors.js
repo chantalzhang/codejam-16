@@ -12,6 +12,25 @@ export function validateValues(values, variables) {
   }
 }
 
+// Messages carry weights as raw float32 bytes in base64: ~4x smaller than JSON number
+// arrays, and still plain JSON for the relay.
+export function packValues(values) {
+  const bytes = new Uint8Array(Float32Array.from(values.flat()).buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+export function unpackValues(text, variables) {
+  const binary = typeof text === 'string' ? atob(text) : '';
+  if (binary.length !== 4 * variables.reduce((sum, variable) => sum + variable.size, 0)) {
+    throw new Error('Packed values do not match the model.');
+  }
+  const floats = new Float32Array(Uint8Array.from(binary, char => char.charCodeAt(0)).buffer);
+  let offset = 0;
+  return variables.map(variable => Array.from(floats.subarray(offset, offset += variable.size)));
+}
+
 export function assignValues(variables, values) {
   validateValues(values, variables);
   tf.tidy(() => variables.forEach((variable, i) => {

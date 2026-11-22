@@ -1,5 +1,5 @@
 import * as tf from '@tensorflow/tfjs';
-import { readValues, validateValues } from './tensors.js';
+import { packValues, readValues, unpackValues, validateValues } from './tensors.js';
 
 // Average of the workers' weight changes, weighted by how many examples each trained on.
 export function averageUpdates(updates, variables) {
@@ -53,15 +53,17 @@ export class SharedTrainer {
       this.drop(message.workerId, `failed: ${message.error}`);
       return;
     }
+    let delta;
     try {
       if (message.count !== assignment.count * run.localSteps || !Number.isFinite(message.loss) ||
           !Number.isFinite(message.computeMs) || message.computeMs < 0) throw new Error();
-      validateValues(message.delta, this.task.variables);
+      delta = unpackValues(message.delta, this.task.variables);
+      validateValues(delta, this.task.variables);
     } catch {
       this.drop(message.workerId, 'sent an invalid update');
       return;
     }
-    pending.results.set(message.workerId, message);
+    pending.results.set(message.workerId, { ...message, delta });
     pending.settle();
   }
 
@@ -100,6 +102,7 @@ export class SharedTrainer {
   // whatever updates arrived. Fails only if no worker sent a usable update.
   async requestUpdates(run, round, assignments, weights, deadlineMs) {
     const pending = { round, assignments, results: new Map(), dropped: new Map() };
+    const packedWeights = packValues(weights);
     let timer;
     try {
       return await new Promise((resolve, reject) => {
@@ -124,7 +127,7 @@ export class SharedTrainer {
           this.send({
             type: 'round', to: workerId, taskId: this.task.id, runId: run.id, round,
             firstStep: (round - 1) * run.localSteps + 1, localSteps: run.localSteps,
-            optimizer: run.optimizer, learningRate: run.learningRate, offset, count, weights,
+            optimizer: run.optimizer, learningRate: run.learningRate, offset, count, weights: packedWeights,
           });
         }
       });
