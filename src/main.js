@@ -40,6 +40,15 @@ function showDev(open) {
 showDev(params.has('dev'));
 $('dev-toggle').addEventListener('click', () => showDev($('dev-panel').hidden));
 $('enlarge-qr').addEventListener('click', () => $('join-dialog').showModal());
+// Copies the phone link, e.g. to send to people on laptops.
+for (const button of document.querySelectorAll('.copy-link')) {
+  const label = button.textContent;
+  button.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(`${relayPage.origin}/`);
+    button.textContent = 'Copied';
+    setTimeout(() => { button.textContent = label; }, 1500);
+  });
+}
 
 let selected = tasks[0];
 let task, trainer, socket, backend;
