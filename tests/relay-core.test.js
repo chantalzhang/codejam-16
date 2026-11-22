@@ -99,6 +99,21 @@ test('workers get join numbers in order; the laptop does not take one', () => {
   assert.deepEqual(numbers, [['worker', 0], ['coordinator', undefined], ['worker', 1], ['worker', 2]]);
 });
 
+test('laptop status reaches every phone, and phones that join later get the latest one', () => {
+  const relay = createRelay();
+  const inbox = { a: [], b: [], late: [] };
+  const join = (name, role) => relay.connect(text => inbox[name]?.push(JSON.parse(text))).receive(JSON.stringify({ type: 'join', role }));
+  const laptop = relay.connect(() => {});
+  laptop.receive(JSON.stringify({ type: 'join', role: 'coordinator' }));
+  join('a', 'worker');
+  join('b', 'worker');
+  laptop.receive(JSON.stringify({ type: 'status', state: 'training', phones: 2 }));
+  join('late', 'worker');
+  for (const name of ['a', 'b', 'late']) {
+    assert.deepEqual(inbox[name].filter(message => message.type === 'status').map(message => message.phones), [2]);
+  }
+});
+
 test('the laptop gets one message per round however many workers there are', () => {
   const names = Array.from({ length: 300 }, (_, i) => `w${i}`);
   const swarm = setup(names);
