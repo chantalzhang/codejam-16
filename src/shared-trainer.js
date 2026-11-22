@@ -139,7 +139,7 @@ export class SharedTrainer {
 
   async train({
     workerIds, rounds, batchSize, localSteps, optimizer, learningRate,
-    outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000, maxWorkersPerRound = 30,
+    outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000, maxWorkersPerRound = 100,
   }) {
     if (this.active) throw new Error('A run is already active.');
     if (!workerIds.length || new Set(workerIds).size !== workerIds.length ||
@@ -175,8 +175,9 @@ export class SharedTrainer {
         const weights = await readValues(this.task.variables);
         checkCancelled();
         if (!run.workerIds.length) throw new Error('Every worker left.');
-        // With a crowd, each round uses the workers that have waited longest, so network
-        // traffic stays flat and everyone takes turns. Sort is stable: ties keep join order.
+        // With a crowd, each round uses the workers that have waited longest, so everyone
+        // takes turns. 100 per round kept rounds under 1.7x slower in scripts/load-test.js;
+        // 200 was 3.2x. Sort is stable: ties keep join order.
         const picked = [...run.workerIds]
           .sort((a, b) => (lastPicked.get(a) ?? 0) - (lastPicked.get(b) ?? 0))
           .slice(0, maxWorkersPerRound);
