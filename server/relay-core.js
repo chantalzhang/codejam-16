@@ -48,10 +48,15 @@ export function createRelay() {
           Object.assign(workers.get(id), { ready: true, backend: message.backend, tasks: message.tasks, device, note });
           presence();
         } else if (role === 'coordinator' && message.type === 'round') {
-          const worker = workers.get(message.to);
-          if (!worker?.ready) throw new Error('Selected worker is not ready.');
-          const { to, ...assignment } = message;
-          worker.send(assignment);
+          // Fan-out: the laptop sends the model once; each assigned worker gets a copy with
+          // its own slice. Workers that are gone are reported, so the laptop drops them.
+          if (!Array.isArray(message.assignments)) throw new Error('Expected round assignments.');
+          const { assignments, ...round } = message;
+          for (const { workerId, offset, count } of assignments) {
+            const worker = workers.get(workerId);
+            if (worker?.ready) worker.send({ ...round, offset, count });
+            else send({ type: 'worker-error', runId: round.runId, round: round.round, workerId, error: 'not connected' });
+          }
         } else if (role === 'worker' && ['update', 'worker-error'].includes(message.type)) {
           coordinator?.send({ ...message, workerId: id });
         } else {

@@ -123,13 +123,12 @@ export class SharedTrainer {
           }
           finish();
         }, deadlineMs);
-        for (const { workerId, offset, count } of assignments) {
-          this.send({
-            type: 'round', to: workerId, taskId: this.task.id, runId: run.id, round,
-            firstStep: (round - 1) * run.localSteps + 1, localSteps: run.localSteps,
-            optimizer: run.optimizer, learningRate: run.learningRate, offset, count, weights: packedWeights,
-          });
-        }
+        // One message for everyone: the relay copies it to each assigned worker.
+        this.send({
+          type: 'round', taskId: this.task.id, runId: run.id, round,
+          firstStep: (round - 1) * run.localSteps + 1, localSteps: run.localSteps,
+          optimizer: run.optimizer, learningRate: run.learningRate, weights: packedWeights, assignments,
+        });
       });
     } finally {
       clearTimeout(timer);
