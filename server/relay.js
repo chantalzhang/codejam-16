@@ -50,12 +50,12 @@ export function attachRelay(server) {
           const device = typeof message.device === 'string' ? message.device.slice(0, 40) : 'Unknown';
           Object.assign(workers.get(id), { ready: true, backend: message.backend, tasks: message.tasks, device });
           presence();
-        } else if (role === 'coordinator' && message.type === 'step') {
+        } else if (role === 'coordinator' && message.type === 'round') {
           const worker = workers.get(message.to);
           if (!worker?.ready) throw new Error('Selected worker is not ready.');
           const { to, ...assignment } = message;
           send(worker.socket, assignment);
-        } else if (role === 'worker' && ['gradient', 'worker-error'].includes(message.type)) {
+        } else if (role === 'worker' && ['update', 'worker-error'].includes(message.type)) {
           send(coordinator, { ...message, workerId: id });
         } else {
           throw new Error('Message is not allowed for this role.');

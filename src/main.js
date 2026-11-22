@@ -1,7 +1,7 @@
 import './style.css';
 import { initializeBackend, memoryUsage, onGpuReset } from './backend.js';
 import { SharedTrainer, timingSummary } from './shared-trainer.js';
-import { assignValues, computeGradients } from './tensors.js';
+import { createOptimizer, trainLocally } from './tensors.js';
 import { tasks } from './tasks.js';
 
 const $ = id => document.getElementById(id);
@@ -26,8 +26,8 @@ function deviceName() {
 function send(message) {
   if (socket.readyState !== WebSocket.OPEN) throw new Error('Relay is disconnected. Reload to reconnect.');
   socket.send(JSON.stringify(message));
-  if (message.type === 'step') {
-    workerInfo(message.to).activity = `computing step ${message.step}`;
+  if (message.type === 'round') {
+    workerInfo(message.to).activity = `training round ${message.round}`;
     showWorkers();
   }
 }
@@ -39,11 +39,11 @@ const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
 function refreshControls() {
   $('start').disabled = !connected || running || !workers.some(canRun);
   $('stop').disabled = !running;
-  $('task').disabled = $('steps').disabled = $('batch-size').disabled = running;
+  for (const id of ['task', 'rounds', 'batch-size', 'local-steps']) $(id).disabled = running;
 }
-const TIMING_IDS = { stepMs: 'step-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
+const TIMING_IDS = { roundMs: 'round-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
 function showProgress(point, history) {
-  $('step').textContent = `${point.step} / ${trainer.active.steps}`;
+  $('round').textContent = `${point.round} / ${trainer.active.rounds}`;
   $('loss').textContent = point.loss.toPrecision(4);
   $('accuracy').textContent = point.accuracy === undefined ? '—' : `${(point.accuracy * 100).toFixed(1)}%`;
   $('elapsed').textContent = `${(point.elapsedMs / 1000).toFixed(1)} s`;
@@ -52,14 +52,15 @@ function showProgress(point, history) {
 }
 function showTask() {
   $('task-note').textContent = selected.description;
-  $('steps').value = selected.defaults.steps;
+  $('rounds').value = selected.defaults.rounds;
   $('batch-size').value = selected.defaults.batchSize;
+  $('local-steps').value = selected.defaults.localSteps;
 }
 function resetModel() {
   task?.dispose();
   task = selected.createTask();
   trainer = new SharedTrainer(task, { send, onProgress: showProgress });
-  for (const id of ['step', 'loss', 'accuracy', 'elapsed', ...Object.values(TIMING_IDS)]) $(id).textContent = '—';
+  for (const id of ['round', 'loss', 'accuracy', 'elapsed', ...Object.values(TIMING_IDS)]) $(id).textContent = '—';
 }
 
 // What the laptop knows about each worker, kept after it leaves so failures stay visible.
@@ -113,7 +114,7 @@ function showWorkers() {
   if (!infos.size) $('workers').textContent = 'No workers yet. Open a worker tab or the phone link.';
   const active = trainer?.active;
   if (active && active.workerIds.some(id => !workers.some(worker => worker.id === id && worker.ready))) {
-    trainer.stop('A worker disconnected. No incomplete step was applied.');
+    trainer.stop('A worker disconnected. No incomplete round was applied.');
   }
   refreshControls();
 }
@@ -147,29 +148,29 @@ function workerTask(taskId) {
   return workerTasks.get(taskId);
 }
 
-let workerRunId, examplesProcessed = 0, currentStep;
+// The optimizer (and its state, e.g. Adam's moments) lives for one run.
+let workerRun, currentRound;
 async function work(message) {
-  currentStep = message;
+  currentRound = message;
   const task = workerTask(message.taskId);
-  if (!Number.isInteger(message.count) || message.count <= 0 ||
-      !Number.isInteger(message.offset) || message.offset < 0 ||
-      !Number.isInteger(message.step) || message.step <= 0) throw new Error('Invalid batch assignment.');
-  if (workerRunId !== message.runId) {
-    workerRunId = message.runId;
-    examplesProcessed = 0;
+  const { round, firstStep, localSteps, offset, count } = message;
+  if (![round, firstStep, localSteps, count].every(value => Number.isInteger(value) && value > 0) ||
+      !Number.isInteger(offset) || offset < 0) throw new Error('Invalid round assignment.');
+  if (workerRun?.id !== message.runId) {
+    workerRun?.optimizer.dispose();
+    workerRun = { id: message.runId, optimizer: createOptimizer(message.optimizer, message.learningRate), examples: 0 };
   }
-  $('worker-status').textContent = `Step ${message.step}: computing gradients…`;
-  assignValues(task.variables, message.weights);
-  const result = await computeGradients(task, message);
+  $('worker-status').textContent = `Round ${round}: training ${localSteps} step${localSteps > 1 ? 's' : ''}…`;
+  const result = await trainLocally(task, workerRun.optimizer, message.weights, message);
   const memory = memoryUsage();
-  examplesProcessed += message.count;
-  $('examples').textContent = examplesProcessed;
+  workerRun.examples += count * localSteps;
+  $('examples').textContent = workerRun.examples;
   $('compute').textContent = formatMs(result.computeMs);
   $('gpu-memory').textContent = formatBytes(memory.gpuBytes);
   $('tensors').textContent = memory.tensors;
-  send({ type: 'gradient', runId: message.runId, step: message.step, count: message.count, memory, ...result });
-  currentStep = undefined;
-  $('worker-status').textContent = `Step ${message.step} sent. Waiting for the next one.`;
+  send({ type: 'update', runId: message.runId, round, count: count * localSteps, memory, ...result });
+  currentRound = undefined;
+  $('worker-status').textContent = `Round ${round} sent. Waiting for the next one.`;
 }
 
 // Tell the laptop, then leave: after a GPU reset this page can't compute anymore.
@@ -177,7 +178,7 @@ function handleGpuReset() {
   const error = 'GPU reset (WebGL context lost). Reload this page to rejoin.';
   $(role === 'worker' ? 'worker-status' : 'status').textContent = error;
   if (socket.readyState === WebSocket.OPEN) {
-    send({ type: 'worker-error', runId: currentStep?.runId, step: currentStep?.step, error });
+    send({ type: 'worker-error', runId: currentRound?.runId, round: currentRound?.round, error });
   }
   socket.close();
 }
@@ -185,9 +186,9 @@ function handleGpuReset() {
 // ---- Connection ----
 
 function receive(message) {
-  if (message.type === 'gradient') {
+  if (message.type === 'update') {
     const info = workerInfo(message.workerId);
-    Object.assign(info, { activity: `step ${message.step} done`, computeMs: message.computeMs, memory: message.memory });
+    Object.assign(info, { activity: `round ${message.round} done`, computeMs: message.computeMs, memory: message.memory });
     info.examples += message.count;
     trainer?.receive(message);
     showWorkers();
@@ -221,12 +222,12 @@ async function initialize() {
     } else if (message.type === 'presence') {
       workers = message.workers;
       showWorkers();
-    } else if (role === 'worker' && message.type === 'step') {
-      // Serialize assignments so a late old step cannot mutate a newer step's model.
+    } else if (role === 'worker' && message.type === 'round') {
+      // Serialize assignments so a late old round cannot mutate a newer round's model.
       queue = queue.then(() => work(message)).catch(error => {
         $('worker-status').textContent = `Failed: ${error.message}`;
         if (socket.readyState === WebSocket.OPEN) {
-          send({ type: 'worker-error', runId: message.runId, step: message.step, error: error.message });
+          send({ type: 'worker-error', runId: message.runId, round: message.round, error: error.message });
         }
       });
     } else if (message.type === 'coordinator-left') {
@@ -251,11 +252,10 @@ async function initialize() {
 }
 
 $('start').addEventListener('click', async () => {
-  const steps = Number($('steps').value);
-  const batchSize = Number($('batch-size').value);
-  if (!Number.isInteger(steps) || steps < 1 || steps > 10_000 ||
-      !Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100_000) {
-    status('Choose a whole-number batch size (≤100,000) and step count (≤10,000).');
+  const [rounds, batchSize, localSteps] = ['rounds', 'batch-size', 'local-steps'].map(id => Number($(id).value));
+  if (![[rounds, 10_000], [batchSize, 1_000], [localSteps, 100]].every(([value, max]) =>
+    Number.isInteger(value) && value >= 1 && value <= max)) {
+    status('Choose whole numbers: rounds ≤ 10,000, images per step ≤ 1,000, local steps ≤ 100.');
     return;
   }
   // Fresh run: forget workers that left and clear last run's numbers.
@@ -271,11 +271,11 @@ $('start').addEventListener('click', async () => {
   status(`Training one shared model with ${participants.length} worker(s)…`);
   try {
     const run = await trainer.train({
-      workerIds: participants.map(worker => worker.id), steps, batchSize,
-      learningRate: selected.defaults.learningRate,
+      workerIds: participants.map(worker => worker.id), rounds, batchSize, localSteps,
+      optimizer: selected.defaults.optimizer, learningRate: selected.defaults.learningRate,
     });
     const outcome = { completed: 'Completed', stopped: 'Stopped', failed: 'Failed' }[run.outcome];
-    status(`${outcome}: ${run.history.at(-1)?.step ?? 0} of ${steps} steps.${run.reason ? ' ' + run.reason : ''}`);
+    status(`${outcome}: ${run.history.at(-1)?.round ?? 0} of ${rounds} rounds.${run.reason ? ' ' + run.reason : ''}`);
     await saveRun({
       ...run, timing: timingSummary(run.history), workers: participants.map(worker => snapshot(worker.id)),
       coordinatorBackend: backend, userAgent: navigator.userAgent,

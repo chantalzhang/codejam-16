@@ -33,7 +33,7 @@ async function connect(url, role) {
   return { socket, send, next };
 }
 
-test('relay routes shared steps and gradients, assigns identity, and limits roles', async t => {
+test('relay routes rounds and updates, assigns identity, and limits roles', async t => {
   const server = createServer();
   const relay = attachRelay(server);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -57,14 +57,14 @@ test('relay routes shared steps and gradients, assigns identity, and limits role
   assert.deepEqual(presence.workers[0].tasks, ['fixture']);
   assert.equal(presence.workers[0].device, 'iPhone');
 
-  coordinator.send({ type: 'step', to: welcome.id, runId: 'run', step: 1, weights: [[1]] });
-  const step = await worker.next('step');
+  coordinator.send({ type: 'round', to: welcome.id, runId: 'run', round: 1, weights: [[1]] });
+  const step = await worker.next('round');
   assert.equal(step.runId, 'run');
   assert.equal(step.to, undefined);
-  worker.send({ type: 'gradient', runId: 'run', step: 1, workerId: 'spoofed', gradients: [[2]] });
-  const update = await coordinator.next('gradient');
+  worker.send({ type: 'update', runId: 'run', round: 1, workerId: 'spoofed', delta: [[2]] });
+  const update = await coordinator.next('update');
   assert.equal(update.workerId, welcome.id);
-  assert.deepEqual(update.gradients, [[2]]);
+  assert.deepEqual(update.delta, [[2]]);
 
   worker.send({ type: 'worker-error', runId: 'run', step: 1, error: 'Computation failed' });
   const failure = await coordinator.next('worker-error');
@@ -73,14 +73,14 @@ test('relay routes shared steps and gradients, assigns identity, and limits role
 
   const secondCoordinator = await connect(url, 'coordinator');
   assert.match((await secondCoordinator.next('error')).error, /already connected/);
-  worker.send({ type: 'step', to: welcome.id });
+  worker.send({ type: 'round', to: welcome.id });
   assert.match((await worker.next('error')).error, /not allowed/);
   coordinator.socket.send('{broken json');
   assert.equal((await coordinator.next('error')).type, 'error');
 
   worker.socket.close();
   assert.deepEqual((await coordinator.next('presence')).workers, []);
-  coordinator.send({ type: 'step', to: welcome.id });
+  coordinator.send({ type: 'round', to: welcome.id });
   assert.match((await coordinator.next('error')).error, /not ready/);
 
   const remainingWorker = await connect(url, 'worker');

@@ -3,7 +3,8 @@ import * as tf from '@tensorflow/tfjs';
 // Stand-in demo task until the fun one is picked. Data files: ml/export_fashion.py.
 export const name = 'Fashion-MNIST (stand-in)';
 export const description = 'Stand-in task: a small CNN learns 10 kinds of clothing from 28×28 Fashion-MNIST images.';
-export const defaults = { steps: 200, batchSize: 32, learningRate: 0.3 };
+// From ml/sim.py: Adam needs far fewer steps than SGD, and syncing every 10 steps was fastest.
+export const defaults = { rounds: 100, batchSize: 32, localSteps: 10, optimizer: 'adam', learningRate: 0.01 };
 export const taskId = 'fashion-mnist-v1';
 
 const SIZE = 28;

@@ -1,60 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
 import * as imageTask from '../src/image-task.js';
 import { decode } from '../src/fashion-task.js';
-import { readFile } from 'node:fs/promises';
-import { SharedTrainer, splitBatch, averageGradients, timingSummary } from '../src/shared-trainer.js';
-import { assignValues, computeGradients, readValues } from '../src/tensors.js';
+import { SharedTrainer, averageUpdates, timingSummary } from '../src/shared-trainer.js';
+import { assignValues, createOptimizer, readValues, trainLocally } from '../src/tensors.js';
 
 await tf.setBackend('cpu');
 
-function closeTo(actual, expected, tolerance = 1e-6) {
+function closeTo(actual, expected, tolerance = 1e-5) {
   assert.ok(Math.abs(actual - expected) < tolerance, `${actual} != ${expected}`);
 }
+function sameWeights(a, b) {
+  a.forEach((values, tensor) => values.forEach((value, i) => closeTo(value, b[tensor][i])));
+}
 
-async function simulate(workerCount, steps = 40, batchSize = 17) {
+// Runs the coordinator against in-process workers that behave like the worker page.
+async function simulate(workerCount, { rounds = 40, batchSize = 17, localSteps = 1, optimizer = 'sgd', learningRate = 0.1 } = {}) {
   const task = createTask();
-  const workers = Array.from({ length: workerCount }, createTask);
+  const workers = Array.from({ length: workerCount }, () => ({ task: createTask() }));
   const trainer = new SharedTrainer(task, {
     send(message) {
       const worker = workers[Number(message.to)];
       void (async () => {
-        assignValues(worker.variables, message.weights);
-        const result = await computeGradients(worker, message);
+        if (worker.runId !== message.runId) {
+          worker.optimizer?.dispose();
+          Object.assign(worker, { runId: message.runId, optimizer: createOptimizer(message.optimizer, message.learningRate) });
+        }
+        const result = await trainLocally(worker.task, worker.optimizer, message.weights, message);
         trainer.receive({
-          type: 'gradient', workerId: message.to, runId: message.runId,
-          step: message.step, count: message.count, ...result,
+          type: 'update', workerId: message.to, runId: message.runId, round: message.round,
+          count: message.count * message.localSteps, ...result,
         });
       })().catch(error => trainer.receive({ ...message, type: 'worker-error', workerId: message.to, error: error.message }));
     },
   });
   try {
     const run = await trainer.train({
-      workerIds: workers.map((_, i) => String(i)), steps, batchSize, learningRate: 0.1,
+      workerIds: workers.map((_, i) => String(i)), rounds, batchSize, localSteps, optimizer, learningRate,
     });
     return { run, weights: await readValues(task.variables) };
   } finally {
     task.dispose();
-    workers.forEach(worker => worker.dispose());
+    workers.forEach(worker => { worker.task.dispose(); worker.optimizer?.dispose(); });
   }
 }
 
-test('fixed global batches are divided without gaps or repeated examples', () => {
-  assert.deepEqual(splitBatch(10, ['a', 'b', 'c']), [
-    { workerId: 'a', offset: 0, count: 4 },
-    { workerId: 'b', offset: 4, count: 3 },
-    { workerId: 'c', offset: 7, count: 3 },
-  ]);
-  assert.throws(() => splitBatch(1, ['a', 'b']), /batch size/);
-  assert.throws(() => splitBatch(10, ['a', 'a']), /distinct/);
-  assert.throws(() => splitBatch(10, []), /workers/);
-});
-
-test('image task gives identical batches however they are split, and computes finite gradients', async () => {
+test('image task gives identical batches however they are split, and trains to finite values', async () => {
   const before = tf.memory().numTensors;
   const task = imageTask.createTask();
+  const optimizer = createOptimizer('sgd', 0.1);
   try {
     assert.equal(task.variables.reduce((sum, variable) => sum + variable.size, 0), 6020);
     const whole = task.makeBatch({ step: 3, offset: 0, count: 6 });
@@ -65,10 +62,11 @@ test('image task gives identical batches however they are split, and computes fi
       joined.dispose();
     }
     tf.dispose([whole, parts]);
-    const update = await computeGradients(task, { step: 1, offset: 0, count: 4 });
-    assert.ok(update.gradients.flat().every(Number.isFinite));
+    const weights = await readValues(task.variables);
+    const update = await trainLocally(task, optimizer, weights, { firstStep: 1, localSteps: 2, offset: 0, count: 4 });
+    assert.ok(update.delta.flat().every(Number.isFinite));
     assert.ok(Number.isFinite(await task.evaluate()));
-  } finally { task.dispose(); }
+  } finally { task.dispose(); optimizer.dispose(); }
   assert.equal(tf.memory().numTensors, before);
 });
 
@@ -82,98 +80,121 @@ test('Fashion-MNIST files decode into images with valid labels', async () => {
   assert.throws(() => decode(new Uint8Array(100)), /file size/);
 });
 
-test('timing summary skips warm-up and splits each step into compute, network, and coordinator time', () => {
-  const point = (step, elapsedMs, waitMs, computeMs) => ({ step, elapsedMs, waitMs, updates: computeMs.map(ms => ({ computeMs: ms })) });
+test('timing summary skips warm-up and splits each round into compute, network, and coordinator time', () => {
+  const point = (round, elapsedMs, waitMs, computeMs) => ({ round, elapsedMs, waitMs, updates: computeMs.map(ms => ({ computeMs: ms })) });
   assert.equal(timingSummary([point(0, 0, 0, []), point(1, 900, 800, [700])]), null);
   assert.deepEqual(timingSummary([
     point(0, 0, 0, []),
     point(1, 900, 800, [700]),
     point(2, 1000, 80, [50, 60]),
     point(3, 1120, 100, [70, 40]),
-  ]), { steps: 2, stepMs: 110, computeMs: 65, networkMs: 25, coordinatorMs: 20 });
+  ]), { rounds: 2, roundMs: 110, computeMs: 65, networkMs: 25, coordinatorMs: 20 });
 });
 
-test('averaging weights mean gradients by actual assigned example count', () => {
+test('updates are averaged by example count and must be finite and match the model', () => {
   const task = createTask();
   try {
-    assert.deepEqual(averageGradients([
-      { count: 1, gradients: [[1], [-1]] },
-      { count: 3, gradients: [[5], [3]] },
+    assert.deepEqual(averageUpdates([
+      { count: 1, delta: [[1], [-1]] },
+      { count: 3, delta: [[5], [3]] },
     ], task.variables), [[4], [2]]);
-    assert.throws(() => averageGradients([{ count: 1, gradients: [[NaN], [0]] }], task.variables), /finite/);
-    assert.throws(() => averageGradients([{ count: 0, gradients: [[1], [0]] }], task.variables), /count/);
+    assert.throws(() => averageUpdates([{ count: 1, delta: [[NaN], [0]] }], task.variables), /finite/);
+    assert.throws(() => averageUpdates([{ count: 0, delta: [[1], [0]] }], task.variables), /count/);
     assert.throws(() => assignValues(task.variables, [[1], [1, 2]]), /match/);
   } finally { task.dispose(); }
 });
 
-test('gradient computation does not update worker weights or leak tensors', async () => {
+test('local training returns the weight change and does not leak tensors', async () => {
   const before = tf.memory().numTensors;
   const task = createTask();
-  const initial = await readValues(task.variables);
-  const allocated = tf.memory().numTensors;
-  for (let step = 1; step <= 3; step++) {
-    const update = await computeGradients(task, { step, offset: 0, count: 8 });
+  const optimizer = createOptimizer('adam', 0.01);
+  const weights = [[0.5], [-0.5]];
+  let afterFirst;
+  for (let round = 1; round <= 3; round++) {
+    const update = await trainLocally(task, optimizer, weights, { firstStep: round, localSteps: 3, offset: 0, count: 8 });
     assert.ok(Number.isFinite(update.loss));
-    assert.equal(update.gradients.length, task.variables.length);
+    const trained = await readValues(task.variables);
+    sameWeights(update.delta.map((values, i) => values.map((value, j) => weights[i][j] + value)), trained);
+    afterFirst ??= tf.memory().numTensors; // Adam allocates its state once.
+    assert.equal(tf.memory().numTensors, afterFirst);
   }
-  assert.deepEqual(await readValues(task.variables), initial);
-  assert.equal(tf.memory().numTensors, allocated);
   task.dispose();
+  optimizer.dispose();
   assert.equal(tf.memory().numTensors, before);
 });
 
-test('one and three workers produce the same learned model on the same global batches', async () => {
-  const before = tf.memory().numTensors;
-  const one = await simulate(1);
-  const three = await simulate(3);
-  assert.equal(one.run.outcome, 'completed');
-  assert.equal(three.run.outcome, 'completed');
-  assert.equal(three.run.history.length, 41);
-  assert.ok(three.run.history.at(-1).loss < 0.01);
-  one.weights.forEach((values, tensor) => values.forEach((value, i) => closeTo(value, three.weights[tensor][i])));
-  for (const point of three.run.history.slice(1)) {
-    assert.equal(point.updates.reduce((sum, update) => sum + update.count, 0), 17);
-  }
-  assert.equal(tf.memory().numTensors, before);
-});
-
-test('distributed update matches an ordinary SGD update on the full batch', async () => {
+test('one step on three workers equals one SGD step on their combined batch', async () => {
   const task = createTask();
   const optimizer = tf.train.sgd(0.1);
   try {
-    const batch = task.makeBatch({ step: 1, offset: 0, count: 17 });
+    const batch = task.makeBatch({ step: 1, offset: 0, count: 3 * 17 });
     optimizer.minimize(() => task.loss(batch));
     tf.dispose(batch);
-    const distributed = await simulate(3, 1);
-    const expected = await readValues(task.variables);
-    expected.forEach((values, tensor) => values.forEach((value, i) => closeTo(value, distributed.weights[tensor][i])));
+    const distributed = await simulate(3, { rounds: 1 });
+    sameWeights(await readValues(task.variables), distributed.weights);
   } finally {
     task.dispose();
     optimizer.dispose();
   }
 });
 
-test('stale, duplicate, and unassigned updates cannot enter a step', async () => {
+test('with one local step, three workers learn exactly like one worker on the same data', async () => {
+  const before = tf.memory().numTensors;
+  const one = await simulate(1, { batchSize: 3 * 17 });
+  const three = await simulate(3);
+  assert.equal(three.run.outcome, 'completed');
+  assert.equal(three.run.history.length, 41);
+  assert.ok(three.run.history.at(-1).loss < 0.01);
+  sameWeights(one.weights, three.weights);
+  for (const point of three.run.history.slice(1)) {
+    assert.equal(point.updates.reduce((sum, update) => sum + update.count, 0), 3 * 17);
+  }
+  assert.equal(tf.memory().numTensors, before);
+});
+
+test('one worker with K local steps matches K ordinary SGD steps', async () => {
+  const task = createTask();
+  const optimizer = tf.train.sgd(0.1);
+  try {
+    for (let step = 1; step <= 10; step++) {
+      const batch = task.makeBatch({ step, offset: 0, count: 17 });
+      optimizer.minimize(() => task.loss(batch));
+      tf.dispose(batch);
+    }
+    const local = await simulate(1, { rounds: 2, localSteps: 5 });
+    sameWeights(await readValues(task.variables), local.weights);
+  } finally {
+    task.dispose();
+    optimizer.dispose();
+  }
+});
+
+test('three workers learn with Adam and several local steps per round', async () => {
+  const { run } = await simulate(3, { rounds: 20, localSteps: 5, optimizer: 'adam', learningRate: 0.05 });
+  assert.equal(run.outcome, 'completed', run.reason);
+  assert.ok(run.history.at(-1).loss < run.history[0].loss / 10);
+  assert.ok(run.history.slice(1).every(point => point.updates.every(update => update.count === 17 * 5)));
+});
+
+test('stale, duplicate, and unassigned updates cannot enter a round', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, {
     send(message) {
       const update = {
-        type: 'gradient', runId: message.runId, workerId: message.to, step: message.step,
-        count: message.count, gradients: [[1], [1]], loss: 1, computeMs: 1,
+        type: 'update', runId: message.runId, workerId: message.to, round: message.round,
+        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1,
       };
       trainer.receive({ ...update, runId: 'old-run' });
-      trainer.receive({ ...update, step: message.step - 1 });
+      trainer.receive({ ...update, round: message.round - 1 });
       trainer.receive({ ...update, workerId: 'unknown' });
       trainer.receive(update);
-      trainer.receive({ ...update, gradients: [[999], [999]] });
+      trainer.receive({ ...update, delta: [[999], [999]] });
     },
   });
   try {
-    const run = await trainer.train({ workerIds: ['a', 'b'], steps: 1, batchSize: 8, learningRate: 0.1 });
+    const run = await trainer.train({ workerIds: ['a', 'b'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
     assert.equal(run.outcome, 'completed');
-    const weights = await readValues(task.variables);
-    closeTo(weights[0][0], -0.1);
-    closeTo(weights[1][0], -0.1);
+    sameWeights(await readValues(task.variables), [[-0.1], [-0.1]]);
   } finally { task.dispose(); }
 });
 
@@ -181,7 +202,7 @@ test('a missing worker times out without applying a partial update', async () =>
   const task = createTask();
   const trainer = new SharedTrainer(task, { send() {} });
   try {
-    const run = await trainer.train({ workerIds: ['absent'], steps: 1, batchSize: 8, learningRate: 0.1, timeoutMs: 20 });
+    const run = await trainer.train({ workerIds: ['absent'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1, timeoutMs: 20 });
     assert.equal(run.outcome, 'failed');
     assert.match(run.reason, /timed out/);
     assert.equal(run.history.length, 1);
@@ -195,14 +216,14 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
   let shouldStop = true;
   const trainer = new SharedTrainer(task, {
     send(message) {
-      const update = { type: 'gradient', workerId: 'a', runId: message.runId, step: message.step,
-        count: message.count, gradients: [[1], [1]], loss: 1, computeMs: 1 };
+      const update = { type: 'update', workerId: 'a', runId: message.runId, round: message.round,
+        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 };
       if (shouldStop) { old = update; trainer.stop(); }
       else { trainer.receive(old); trainer.receive(update); }
     },
   });
   try {
-    const settings = { workerIds: ['a'], steps: 1, batchSize: 8, learningRate: 0.1 };
+    const settings = { workerIds: ['a'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 };
     const stopped = await trainer.train(settings);
     assert.equal(stopped.outcome, 'stopped');
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
@@ -214,16 +235,17 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
   } finally { task.dispose(); }
 });
 
-test('invalid worker counts fail rather than changing the effective batch', async () => {
+test('wrong example counts fail rather than skewing the average', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, {
     send(message) {
-      trainer.receive({ type: 'gradient', runId: message.runId, workerId: message.to, step: message.step,
-        count: message.count + 1, gradients: [[1], [1]], loss: 1, computeMs: 1 });
+      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
+        count: message.count, delta: [[1], [1]], loss: 1, computeMs: 1 });
     },
   });
   try {
-    const run = await trainer.train({ workerIds: ['a'], steps: 1, batchSize: 8, learningRate: 0.1 });
+    // 3 local steps of 8 examples, but the worker claims only 8.
+    const run = await trainer.train({ workerIds: ['a'], rounds: 1, batchSize: 8, localSteps: 3, optimizer: 'sgd', learningRate: 0.1 });
     assert.equal(run.outcome, 'failed');
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
   } finally { task.dispose(); }

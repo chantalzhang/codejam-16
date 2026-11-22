@@ -1,47 +1,36 @@
 import * as tf from '@tensorflow/tfjs';
 import { readValues, validateValues } from './tensors.js';
 
-export function splitBatch(batchSize, workerIds) {
-  if (!Number.isInteger(batchSize) || batchSize < workerIds.length || !workerIds.length ||
-      new Set(workerIds).size !== workerIds.length) {
-    throw new Error('Use distinct workers and a batch size at least as large as the worker count.');
-  }
-  let offset = 0;
-  return workerIds.map((workerId, index) => {
-    const count = Math.floor(batchSize / workerIds.length) + (index < batchSize % workerIds.length ? 1 : 0);
-    const assignment = { workerId, offset, count };
-    offset += count;
-    return assignment;
-  });
-}
-
-export function averageGradients(updates, variables) {
-  if (!updates.length) throw new Error('No gradients received.');
+// Average of the workers' weight changes, weighted by how many examples each trained on.
+export function averageUpdates(updates, variables) {
+  if (!updates.length) throw new Error('No updates received.');
   for (const update of updates) {
     if (!Number.isInteger(update.count) || update.count <= 0) throw new Error('Invalid example count.');
-    validateValues(update.gradients, variables);
+    validateValues(update.delta, variables);
   }
   const total = updates.reduce((sum, update) => sum + update.count, 0);
   return variables.map((variable, tensor) => Array.from({ length: variable.size }, (_, element) =>
-    updates.reduce((sum, update) => sum + update.gradients[tensor][element] * update.count, 0) / total));
+    updates.reduce((sum, update) => sum + update.delta[tensor][element] * update.count, 0) / total));
 }
 
-// Average time per step, skipping step 1 (GPU warm-up). Network time is approximate:
-// the wait for all gradients minus the slowest worker's compute time.
+// Average time per round, skipping round 1 (GPU warm-up). Network time is approximate:
+// the wait for all updates minus the slowest worker's compute time.
 export function timingSummary(history) {
-  const steps = history.slice(2).map((point, i) => {
-    const stepMs = point.elapsedMs - history[i + 1].elapsedMs;
+  const rounds = history.slice(2).map((point, i) => {
+    const roundMs = point.elapsedMs - history[i + 1].elapsedMs;
     const computeMs = Math.max(...point.updates.map(update => update.computeMs));
-    return { stepMs, computeMs, networkMs: point.waitMs - computeMs, coordinatorMs: stepMs - point.waitMs };
+    return { roundMs, computeMs, networkMs: point.waitMs - computeMs, coordinatorMs: roundMs - point.waitMs };
   });
-  if (!steps.length) return null;
-  const mean = key => steps.reduce((sum, step) => sum + step[key], 0) / steps.length;
+  if (!rounds.length) return null;
+  const mean = key => rounds.reduce((sum, round) => sum + round[key], 0) / rounds.length;
   return {
-    steps: steps.length, stepMs: mean('stepMs'), computeMs: mean('computeMs'),
+    rounds: rounds.length, roundMs: mean('roundMs'), computeMs: mean('computeMs'),
     networkMs: mean('networkMs'), coordinatorMs: mean('coordinatorMs'),
   };
 }
 
+// Local SGD: each round, every worker trains its own copy for `localSteps` steps on
+// `batchSize` examples per step, then the shared model moves by the average change.
 export class SharedTrainer {
   constructor(task, { send, onProgress = () => {} }) {
     this.task = task;
@@ -53,8 +42,9 @@ export class SharedTrainer {
 
   receive(message) {
     const pending = this.pending;
-    if (!pending || this.active?.cancelReason || message.runId !== this.active?.id ||
-        message.step !== pending.step || pending.results.has(message.workerId)) return;
+    const run = this.active;
+    if (!pending || run?.cancelReason || message.runId !== run?.id ||
+        message.round !== pending.round || pending.results.has(message.workerId)) return;
     const assignment = pending.assignments.find(item => item.workerId === message.workerId);
     if (!assignment) return;
     if (message.type === 'worker-error') {
@@ -62,11 +52,11 @@ export class SharedTrainer {
       return;
     }
     try {
-      if (message.count !== assignment.count || !Number.isFinite(message.loss) ||
+      if (message.count !== assignment.count * run.localSteps || !Number.isFinite(message.loss) ||
           !Number.isFinite(message.computeMs) || message.computeMs < 0) {
-        throw new Error('Worker returned invalid step statistics.');
+        throw new Error('Worker returned invalid round statistics.');
       }
-      validateValues(message.gradients, this.task.variables);
+      validateValues(message.delta, this.task.variables);
       pending.results.set(message.workerId, message);
       if (pending.results.size === pending.assignments.length) {
         pending.resolve([...pending.results.values()]);
@@ -82,8 +72,8 @@ export class SharedTrainer {
     this.pending?.reject(new Error(reason));
   }
 
-  async requestGradients(run, step, assignments, weights, timeoutMs) {
-    const pending = { step, assignments, results: new Map() };
+  async requestUpdates(run, round, assignments, weights, timeoutMs) {
+    const pending = { round, assignments, results: new Map() };
     let timer;
     try {
       return await new Promise((resolve, reject) => {
@@ -92,8 +82,9 @@ export class SharedTrainer {
         timer = setTimeout(() => reject(new Error('A worker timed out; no partial update was applied.')), timeoutMs);
         for (const { workerId, offset, count } of assignments) {
           this.send({
-            type: 'step', to: workerId, taskId: this.task.id,
-            runId: run.id, step, offset, count, weights,
+            type: 'round', to: workerId, taskId: this.task.id, runId: run.id, round,
+            firstStep: (round - 1) * run.localSteps + 1, localSteps: run.localSteps,
+            optimizer: run.optimizer, learningRate: run.learningRate, offset, count, weights,
           });
         }
       });
@@ -103,47 +94,45 @@ export class SharedTrainer {
     }
   }
 
-  async train({ workerIds, steps, batchSize, learningRate, timeoutMs = 30_000 }) {
+  async train({ workerIds, rounds, batchSize, localSteps, optimizer, learningRate, timeoutMs = 30_000 }) {
     if (this.active) throw new Error('A run is already active.');
-    if (!Number.isInteger(steps) || steps <= 0 ||
+    if (!workerIds.length || new Set(workerIds).size !== workerIds.length ||
+        ![rounds, batchSize, localSteps].every(value => Number.isInteger(value) && value > 0) ||
         !Number.isFinite(learningRate) || learningRate <= 0 ||
         !Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid training settings.');
-    const assignments = splitBatch(batchSize, workerIds);
+    // Worker i always gets examples [i × batchSize, (i + 1) × batchSize) of each global step.
+    const assignments = workerIds.map((workerId, i) => ({ workerId, offset: i * batchSize, count: batchSize }));
     const run = {
-      id: crypto.randomUUID(), taskId: this.task.id, workerIds,
-      steps, batchSize, learningRate, startedAt: new Date().toISOString(),
-      history: [], outcome: 'running',
+      id: crypto.randomUUID(), taskId: this.task.id, workerIds, rounds, batchSize, localSteps,
+      optimizer, learningRate, startedAt: new Date().toISOString(), history: [], outcome: 'running',
     };
     this.active = run;
-    const optimizer = tf.train.sgd(learningRate);
     const started = performance.now();
     const checkCancelled = () => { if (run.cancelReason) throw new Error(run.cancelReason); };
-    const record = async (step, updates = [], waitMs = 0) => {
+    const record = async (round, updates = [], waitMs = 0) => {
       // Tasks return a loss, or { loss, accuracy }.
       const evaluation = await this.task.evaluate();
       const { loss, accuracy } = typeof evaluation === 'number' ? { loss: evaluation } : evaluation;
       checkCancelled();
       if (!Number.isFinite(loss)) throw new Error('Evaluation loss is not finite.');
-      const point = { step, loss, accuracy, elapsedMs: performance.now() - started, waitMs, updates };
+      const point = { round, loss, accuracy, elapsedMs: performance.now() - started, waitMs, updates };
       run.history.push(point);
       this.onProgress(point, run.history);
     };
     try {
       await record(0);
-      for (let step = 1; step <= steps; step++) {
+      for (let round = 1; round <= rounds; round++) {
         const weights = await readValues(this.task.variables);
         checkCancelled();
         const waitStarted = performance.now();
-        const updates = await this.requestGradients(run, step, assignments, weights, timeoutMs);
+        const updates = await this.requestUpdates(run, round, assignments, weights, timeoutMs);
         const waitMs = performance.now() - waitStarted;
         checkCancelled();
-        const gradients = averageGradients(updates, this.task.variables);
-        tf.tidy(() => optimizer.applyGradients(Object.fromEntries(
-          this.task.variables.map((variable, i) => [
-            variable.name, tf.tensor(gradients[i], variable.shape, 'float32'),
-          ]),
-        )));
-        await record(step, updates.map(({ workerId, count, loss, computeMs }) => ({
+        const average = averageUpdates(updates, this.task.variables);
+        tf.tidy(() => this.task.variables.forEach((variable, i) => {
+          variable.assign(variable.add(tf.tensor(average[i], variable.shape, 'float32')));
+        }));
+        await record(round, updates.map(({ workerId, count, loss, computeMs }) => ({
           workerId, count, loss, computeMs,
         })), waitMs);
       }
@@ -152,7 +141,6 @@ export class SharedTrainer {
       run.outcome = run.cancelReason ? 'stopped' : 'failed';
       run.reason = error.message;
     } finally {
-      optimizer.dispose();
       this.active = null;
     }
     run.elapsedMs = performance.now() - started;
