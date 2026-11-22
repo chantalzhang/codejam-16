@@ -1,6 +1,6 @@
 // Cloudflare deploy config: built pages from dist/ plus the relay. Deploy: npm run deploy
 {
-  "name": "browser-swarm",
+  "name": "gpu",
   "main": "worker/index.js",
   "compatibility_date": "2026-11-01",
   "assets": { "directory": "./dist", "binding": "ASSETS" },
