@@ -104,12 +104,17 @@ try {
   await page.locator('#stop').click();
   assert.equal((await savedRun()).outcome, 'stopped');
 
+  // A worker closing its tab mid-run just leaves; the others keep training.
+  const roundNow = () => page.evaluate(() => parseInt(document.querySelector('#round').textContent));
   await page.locator('#start').click();
   await page.waitForFunction(() => parseInt(document.querySelector('#round').textContent) >= 1);
   await third.close();
-  const disconnected = await savedRun();
-  assert.equal(disconnected.outcome, 'stopped');
-  assert.match(disconnected.reason, /disconnected/);
+  const roundAtLeave = await roundNow();
+  await page.waitForFunction(start => parseInt(document.querySelector('#round').textContent) >= start + 5, roundAtLeave);
+  await page.locator('#stop').click();
+  const leftRun = await savedRun();
+  assert.equal(leftRun.outcome, 'stopped');
+  assert.ok(leftRun.history.slice(-3).every(point => point.updates.length === 2));
   await readyWorkers(2);
   assert.equal(await page.locator('#workers .card.left').count(), 1, 'A worker that left stays visible until the next run');
   await run(3); // Old in-flight updates must not contaminate this new run.
@@ -132,12 +137,11 @@ try {
   assert.ok(fashion.history.every(point => point.accuracy >= 0 && point.accuracy <= 1));
   assert.match(await page.locator('#accuracy').textContent(), /^\d+\.\d%$/);
 
-  // Simulate a phone GPU reset mid-run: the run must end quickly, and the laptop must say why.
+  // Simulate a phone GPU reset mid-run: that worker drops out and the run keeps going.
   await page.locator('#task').selectOption('linear-function-v1');
   await page.locator('#rounds').fill('10000');
   await page.locator('#start').click();
   await page.waitForFunction(() => parseInt(document.querySelector('#round').textContent) >= 1);
-  const resetAt = Date.now();
   await first.evaluate(async () => {
     // Import the exact module URL the page loaded, so this is the page's TF.js instance.
     const url = performance.getEntriesByType('resource').map(entry => entry.name)
@@ -146,11 +150,12 @@ try {
     tf.backend().gpgpu.gl.getExtension('WEBGL_lose_context').loseContext();
   });
   await first.waitForFunction(() => /GPU reset/.test(document.querySelector('#worker-status').textContent));
+  const roundAtReset = await roundNow();
+  await page.waitForFunction(start => parseInt(document.querySelector('#round').textContent) >= start + 5, roundAtReset);
+  await page.locator('#stop').click();
   const gpuReset = await savedRun();
-  assert.ok(Date.now() - resetAt < 5_000, 'Run did not end promptly after a GPU reset');
-  // Mid-round resets report "GPU reset"; resets between rounds show up as a disconnect.
-  assert.notEqual(gpuReset.outcome, 'completed');
-  assert.match(gpuReset.reason, /GPU reset|disconnected/);
+  assert.equal(gpuReset.outcome, 'stopped');
+  assert.ok(gpuReset.history.slice(-3).every(point => point.updates.length === 1));
   await page.waitForFunction(() => /GPU reset/.test(document.querySelector('#workers .card.left .state')?.textContent));
   await readyWorkers(1);
 
@@ -170,7 +175,6 @@ try {
     initialLoss: three.history[0].loss,
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
-    simulatedGpuReset: gpuReset.reason,
     screenshot: join(process.env.RUNS_DIR, 'laptop.png'),
     checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, and image task passed.',
   }, null, 2));

@@ -73,6 +73,14 @@ export class SharedTrainer {
     pending.settle();
   }
 
+  // A worker left: stop waiting for it this round and leave it out of later rounds.
+  removeWorker(workerId, reason) {
+    const run = this.active;
+    if (!run?.workerIds.includes(workerId)) return;
+    run.workerIds = run.workerIds.filter(id => id !== workerId);
+    this.drop(workerId, reason);
+  }
+
   stop(reason = 'Stopped by coordinator') {
     if (!this.active) return;
     this.active.cancelReason = reason;
@@ -151,6 +159,7 @@ export class SharedTrainer {
       for (let round = 1; round <= rounds; round++) {
         const weights = await readValues(this.task.variables);
         checkCancelled();
+        if (!run.workerIds.length) throw new Error('Every worker left.');
         // Worker i gets examples [i × batchSize, (i + 1) × batchSize) of each global step.
         const assignments = run.workerIds.map((workerId, i) => ({ workerId, offset: i * batchSize, count: batchSize }));
         const waitStarted = performance.now();

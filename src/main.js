@@ -119,9 +119,9 @@ function showWorkers() {
   $('worker-count').textContent = workers.length;
   $('workers').replaceChildren(...[...infos].map(([id, info]) => card(id, info)));
   if (!infos.size) $('workers').textContent = 'No workers yet. Open a worker tab or the phone link.';
-  const active = trainer?.active;
-  if (active && active.workerIds.some(id => !workers.some(worker => worker.id === id && worker.ready))) {
-    trainer.stop('A worker disconnected. No incomplete round was applied.');
+  // Workers that disconnect mid-run just leave it; the run continues without them.
+  for (const id of [...trainer?.active?.workerIds ?? []]) {
+    if (!workers.some(worker => worker.id === id && worker.ready)) trainer.removeWorker(id, 'left');
   }
   refreshControls();
 }
