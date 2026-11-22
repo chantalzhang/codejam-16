@@ -20,7 +20,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 1100 } });
   page.on('pageerror', error => errors.push(error.message));
   const base = server.resolvedUrls.local[0];
-  await page.goto(`${base}?role=laptop`);
+  await page.goto(`${base}?role=laptop&dev`);
   assert.equal(await page.locator('#worker-link').getAttribute('href'), base);
   await page.waitForFunction(() => document.querySelector('#join-qr').src.startsWith('data:image/png'));
   await page.waitForFunction(() => document.querySelector('#connection').textContent.startsWith('Connected'));
@@ -35,8 +35,8 @@ try {
     const worker = await browser.newPage();
     worker.on('pageerror', error => errors.push(error.message));
     await worker.goto(`${base}?role=worker&backend=${backend}`);
-    await worker.waitForFunction(() => document.querySelector('#connection').textContent.startsWith('Connected'));
-    assert.equal(await worker.locator('#role-title').textContent(), 'Shared training · worker');
+    await worker.waitForFunction(() => document.querySelector('#worker-connection').textContent.startsWith('Connected'));
+    assert.equal(await worker.locator('#worker').isVisible(), true);
     await worker.waitForFunction(() => /screen/i.test(document.querySelector('#screen').textContent) &&
       document.querySelector('#screen').textContent !== 'Keep this tab open and the screen on.');
     return worker;
@@ -202,7 +202,7 @@ try {
 
   // A WebGPU worker (what iPhones use) trains alongside a WebGL one.
   const gpuWorker = await addWorker('webgpu');
-  assert.match(await gpuWorker.locator('#connection').textContent(), /WebGPU$/);
+  assert.match(await gpuWorker.locator('#worker-connection').textContent(), /WebGPU$/);
   await readyWorkers(2);
   await page.locator('#task').selectOption('fashion-mnist-v1');
   const mixed = await run(2, 8, 2);

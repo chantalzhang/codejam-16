@@ -3,18 +3,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Training dev</title>
+    <meta name="theme-color" content="#111315" />
+    <title>GPUmaxxing</title>
   </head>
   <body>
-    <main>
-      <header>
-        <h1 id="role-title">Training dev</h1>
-        <p id="connection" role="status">Connecting…</p>
-      </header>
+    <main class="layout">
+      <!-- Big screen (?role=laptop): coordinates the run. -->
+      <section id="coordinator" class="projector-preview" aria-label="Training monitor" hidden>
+        <header class="run-header">
+          <div class="run-heading"><h1>GPUmaxxing</h1><p class="run-premise"><strong id="header-workers">0</strong> <span id="premise-text">phones ready</span></p></div>
+          <span id="room-status" class="run-status">Waiting for phones</span>
+        </header>
+        <p id="run-result" class="run-result" hidden></p>
 
-      <div id="coordinator" class="split" hidden>
-        <section class="panel">
-          <h2>Laptop <small>averages the workers' changes into one model</small></h2>
+        <div class="monitor-layout">
+          <div class="plots">
+            <section id="predictions-panel" class="predictions-panel" aria-label="Live predictions on fixed test images" hidden>
+              <div class="plot-heading"><h2 id="prediction-title">Test predictions <span class="prediction-note">Fixed held-out images · class probabilities</span></h2><span id="correct-count"></span></div>
+              <div class="prediction-grid" id="predictions"></div>
+            </section>
+            <div class="training-diagnostics">
+              <section class="loss-panel">
+                <div class="plot-heading"><h2>Loss <strong id="room-loss">—</strong><span class="loss-note" id="loss-note">held-out test set</span></h2><span class="plot-note" id="comparison-time"></span></div>
+                <svg id="loss-chart" role="img" aria-label="Held-out loss (log scale) and held-out accuracy over elapsed time"></svg>
+              </section>
+              <section id="probability-panel" class="probability-panel" hidden>
+                <div class="plot-heading"><h2>Class probability history</h2><span class="plot-note" id="evaluation-count"></span></div>
+                <svg id="probability-chart" role="img" aria-label="Class probabilities on the shown images at each evaluation; outlined cells show the winning prediction, green for correct and red for incorrect"></svg>
+              </section>
+            </div>
+          </div>
+
+          <aside class="run-info">
+            <div class="worker-count"><span>Phones online</span><strong id="room-workers">0</strong><span id="latest-join" class="latest-join"></span></div>
+            <dl class="run-stats">
+              <div><dt>Elapsed</dt><dd id="room-elapsed">—</dd></div>
+              <div><dt>Round</dt><dd id="room-step">—</dd></div>
+              <div><dt>Held-out accuracy</dt><dd id="room-accuracy">—</dd></div>
+              <div><dt>Task</dt><dd id="room-task"></dd></div>
+            </dl>
+            <section class="join-info" aria-labelledby="join-title">
+              <button id="enlarge-qr" class="qr-thumbnail" aria-label="Enlarge join QR code" aria-haspopup="dialog">
+                <img id="join-qr" class="join-qr" alt="QR code for the phone link" width="88" height="88" />
+                <span>Enlarge QR</span>
+              </button>
+              <div class="join-copy">
+                <h2 id="join-title">Join this run</h2>
+                <a id="worker-link" class="join-url" href="/" target="_blank" rel="noopener"></a>
+                <span class="join-note">Scan, then keep the page open</span>
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <dialog class="qr-dialog" id="join-dialog" aria-labelledby="join-dialog-title">
+          <header><h2 id="join-dialog-title">Join this run</h2><form method="dialog"><button>Close</button></form></header>
+          <img id="dialog-qr" class="join-qr" alt="QR code for the phone link" />
+          <p class="join-url" id="dialog-url"></p>
+          <p class="join-note">Scan with your phone camera</p>
+        </dialog>
+
+        <footer class="control-bar">
+          <span id="control-note">Laptop · keep this tab visible during runs</span>
+          <div><button id="start" disabled>Start fresh run</button><button id="stop" disabled>Stop</button><button id="dev-toggle" aria-expanded="false" aria-controls="dev-panel">Dev</button></div>
+        </footer>
+
+        <!-- Dev controls and per-worker diagnostics, never shown on the big screen by default. -->
+        <aside id="dev-panel" class="dev-panel" aria-label="Dev controls" hidden>
+          <h2 id="role-title">Shared training · laptop</h2>
+          <p id="connection" class="hint" role="status">Connecting…</p>
           <div class="controls">
             <label>Task <select id="task"></select></label>
             <label>Images per phone per step <input id="batch-size" type="number" min="1" max="1000" /></label>
@@ -24,10 +81,6 @@
             <label>Stop after (s) <input id="time-limit" type="number" min="1" placeholder="off" /></label>
           </div>
           <p id="task-note" class="hint"></p>
-          <div class="controls">
-            <button id="start" disabled>Start fresh run</button>
-            <button id="stop" disabled>Stop</button>
-          </div>
           <p id="result" class="result" hidden></p>
           <p id="status" class="state" role="status" aria-live="polite">Open a worker, then start.</p>
           <dl class="metrics">
@@ -36,7 +89,7 @@
             <div><dt>Loss (lower is better)</dt><dd id="loss">—</dd></div>
             <div><dt>Elapsed</dt><dd id="elapsed">—</dd></div>
           </dl>
-          <h3>Time per round <small>average, skips warm-up round 1</small></h3>
+          <h2>Time per round <small>average, skips warm-up round 1</small></h2>
           <dl class="metrics">
             <div><dt>Total</dt><dd id="round-time">—</dd></div>
             <div><dt>Slowest worker</dt><dd id="compute-time">—</dd></div>
@@ -44,30 +97,44 @@
             <div><dt>Laptop</dt><dd id="coordinator-time">—</dd></div>
           </dl>
           <p id="saved" class="hint"></p>
-        </section>
-
-        <section class="panel">
-          <h2>Workers (<span id="worker-count">0</span>)
-          </h2>
-          <div class="join">
-            <img id="join-qr" alt="QR code for the phone link" width="160" height="160" />
-            <p>Scan to join, or open<br /><a id="worker-link" href="/" target="_blank" rel="noopener"></a></p>
-          </div>
+          <h2>Workers (<span id="worker-count">0</span>)</h2>
           <div id="workers"></div>
-        </section>
-      </div>
+        </aside>
+      </section>
 
-      <section id="worker" class="panel" hidden>
-        <h2>Worker <small>trains its own copy, then sends back the change</small></h2>
-        <p id="worker-status" class="state" role="status">Waiting for the laptop to start a run.</p>
-        <dl class="metrics">
-          <div><dt>Examples this run</dt><dd id="examples">0</dd></div>
-          <div><dt>Last compute</dt><dd id="compute">—</dd></div>
-          <div><dt>GPU memory</dt><dd id="gpu-memory">—</dd></div>
-          <div><dt>Tensors</dt><dd id="tensors">—</dd></div>
-        </dl>
-        <p id="screen" class="hint">Keep this tab open and the screen on.</p>
-        <p class="hint">The laptop shows these numbers too.</p>
+      <!-- Phone (plain link): trains its share each round. -->
+      <section id="worker" class="phone-preview" aria-label="Phone" hidden>
+        <header class="phone-header"><h1>GPUmaxxing</h1><span id="worker-state" class="worker-state">Connecting</span></header>
+        <p class="phone-team" id="phone-team" hidden><strong id="phone-workers">0</strong> <span id="phone-team-text">phones · one shared model</span></p>
+        <p class="phone-summary" id="phone-summary" hidden></p>
+
+        <section class="phone-prediction prediction-sample" id="phone-prediction" aria-label="Shared model prediction on a fixed test image" hidden>
+          <div class="phone-model-heading"><h2>Shared model’s guess</h2><span class="prediction-actual" id="phone-actual"></span></div>
+          <div class="item-art"><img id="phone-image" alt="" /></div>
+          <div class="prediction-current"><strong class="prediction-name">—</strong><span class="prediction-result"></span></div>
+          <div class="prediction-transition"></div>
+          <dl class="prediction-comparison" hidden><div><dt>Initial</dt><dd class="first-guess"></dd></div><div><dt>Final</dt><dd class="final-guess"></dd></div></dl>
+        </section>
+
+        <div class="contribution"><strong id="examples">0</strong><span>Examples processed by your phone</span></div>
+        <section class="phone-rate" id="phone-rate" aria-labelledby="phone-rate-title" hidden>
+          <div class="phone-rate-heading"><h2 id="phone-rate-title">Your training speed</h2><span id="phone-rate-value">— examples/s</span></div>
+          <svg id="phone-rate-chart" viewBox="0 0 360 48" preserveAspectRatio="none" role="img" aria-label="This phone's training speed in examples per second over the last 30 seconds"></svg>
+          <div class="phone-rate-time"><span>Last 30s</span><span>now</span></div>
+        </section>
+        <footer class="phone-footer"><p class="phone-guidance" id="worker-status" role="status">Waiting for the laptop to start a run.</p><button id="disconnect">Disconnect</button></footer>
+        <p id="screen" class="phone-screen">Keep this tab open and the screen on.</p>
+
+        <details class="phone-debug">
+          <summary>Debug</summary>
+          <dl>
+            <dt>Page</dt><dd id="worker-role-title">Shared training · worker</dd>
+            <dt>Connection</dt><dd id="worker-connection">Connecting…</dd>
+            <dt>Last compute</dt><dd id="compute">—</dd>
+            <dt>GPU memory</dt><dd id="gpu-memory">—</dd>
+            <dt>Tensors</dt><dd id="tensors">—</dd>
+          </dl>
+        </details>
       </section>
     </main>
     <script type="module" src="/src/main.js"></script>
