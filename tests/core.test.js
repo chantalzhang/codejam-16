@@ -217,15 +217,38 @@ test('stale, duplicate, and unassigned updates cannot enter a round', async () =
   } finally { task.dispose(); }
 });
 
-test('a missing worker times out without applying a partial update', async () => {
+test('a round with no usable updates fails without changing the model', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, { send() {} });
   try {
-    const run = await trainer.train({ workerIds: ['absent'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1, timeoutMs: 20 });
+    const run = await trainer.train({ workerIds: ['absent'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1, deadlineMs: 5 });
     assert.equal(run.outcome, 'failed');
-    assert.match(run.reason, /timed out/);
+    assert.match(run.reason, /No worker sent a usable update.*deadline/);
     assert.equal(run.history.length, 1);
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
+  } finally { task.dispose(); }
+});
+
+test('workers that miss the deadline or fail are dropped, and the run continues with the rest', async () => {
+  const task = createTask();
+  const trainer = new SharedTrainer(task, {
+    send(message) {
+      const update = { type: 'update', runId: message.runId, workerId: message.to, round: message.round,
+        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 };
+      if (message.to === 'fast') trainer.receive(update);
+      if (message.to === 'broken') trainer.receive({ ...update, type: 'worker-error', error: 'GPU reset' });
+      // 'silent' never answers.
+    },
+  });
+  try {
+    const run = await trainer.train({ workerIds: ['fast', 'silent', 'broken'], rounds: 3, batchSize: 8, localSteps: 1,
+      optimizer: 'sgd', learningRate: 0.1, deadlineMs: 5 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    assert.deepEqual(run.history[1].dropped.map(item => item.workerId).sort(), ['broken', 'silent']);
+    assert.match(run.history[1].dropped.find(item => item.workerId === 'silent').reason, /deadline/);
+    assert.match(run.history[1].dropped.find(item => item.workerId === 'broken').reason, /GPU reset/);
+    assert.ok(run.history.slice(2).every(point => point.updates.length === 1 && point.dropped.length === 0));
+    sameWeights(await readValues(task.variables), [[-0.3], [-0.3]]); // Three rounds of the fast worker's update.
   } finally { task.dispose(); }
 });
 
@@ -254,7 +277,7 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
   } finally { task.dispose(); }
 });
 
-test('wrong example counts fail rather than skewing the average', async () => {
+test('a worker with a wrong example count is dropped rather than skewing the average', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, {
     send(message) {
@@ -266,6 +289,7 @@ test('wrong example counts fail rather than skewing the average', async () => {
     // 3 local steps of 8 examples, but the worker claims only 8.
     const run = await trainer.train({ workerIds: ['a'], rounds: 1, batchSize: 8, localSteps: 3, optimizer: 'sgd', learningRate: 0.1 });
     assert.equal(run.outcome, 'failed');
+    assert.match(run.reason, /invalid update/);
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
   } finally { task.dispose(); }
 });
