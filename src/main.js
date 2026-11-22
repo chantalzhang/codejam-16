@@ -192,6 +192,22 @@ function handleGpuReset() {
   socket.close();
 }
 
+// A sleeping screen pauses the page, so workers ask the browser to keep it on. The browser
+// releases the lock whenever the page is hidden, and some only grant it after a tap.
+let screenLock;
+async function keepScreenOn() {
+  if (screenLock && !screenLock.released) return;
+  try {
+    screenLock = await navigator.wakeLock.request('screen');
+    $('screen').textContent = 'Screen stays on while this tab is open.';
+    screenLock.addEventListener('release', () => { $('screen').textContent = 'Tap anywhere to keep the screen on.'; });
+  } catch {
+    $('screen').textContent = navigator.wakeLock
+      ? 'Tap anywhere to keep the screen on.'
+      : "This browser can't keep the screen on. Keep it on yourself.";
+  }
+}
+
 // ---- Connection ----
 
 function receive(message) {
@@ -211,6 +227,11 @@ function receive(message) {
 async function initialize() {
   backend = await initializeBackend(role === 'worker' ? preferredBackend : 'webgl');
   onGpuReset(handleGpuReset);
+  if (role === 'worker') {
+    void keepScreenOn();
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) void keepScreenOn(); });
+    document.addEventListener('pointerdown', () => void keepScreenOn());
+  }
   if (role === 'coordinator') {
     showTask();
     resetModel();
