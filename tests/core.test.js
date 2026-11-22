@@ -7,6 +7,7 @@ import * as imageTask from '../src/image-task.js';
 import { classes, decode, sliceFor } from '../src/fashion-task.js';
 import { decode as decodeColor } from '../src/color-image-task.js';
 import games from '../src/games-task.js';
+import brainrot from '../src/brainrot-task.js';
 import { SharedTrainer, timingSummary } from '../src/shared-trainer.js';
 import { createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
 import { createRelay } from '../server/relay-core.js';
@@ -141,6 +142,15 @@ test('Guess the game files decode, and every training slice has the same number 
   const display = decodeColor(new Uint8Array(await readFile('public/data/games-display.bin')), 64);
   assert.deepEqual(Array.from(display.labels, label => games.classes[label]), ['Minecraft', 'Fortnite', 'Among Us', 'CS2']);
   assert.deepEqual([0, 9, 10].map(games.sliceFor), [0, 9, 0]);
+});
+
+test('brainrot files decode into one balanced slice, held-out test images, and 4 display images', async () => {
+  const train = decodeColor(new Uint8Array(await readFile('public/data/brainrot-train-0.bin')));
+  assert.deepEqual(brainrot.classes.map((_, c) => train.labels.filter(label => label === c).length), [122, 122, 122, 122, 122]);
+  const test = decodeColor(new Uint8Array(await readFile('public/data/brainrot-test.bin')));
+  assert.ok(test.count > 150 && test.labels.every(label => label < brainrot.classes.length));
+  const display = decodeColor(new Uint8Array(await readFile('public/data/brainrot-display.bin')), 64);
+  assert.equal(display.count, 4);
 });
 
 test('timing summary skips warm-up and splits each round into compute, network, and coordinator time', () => {

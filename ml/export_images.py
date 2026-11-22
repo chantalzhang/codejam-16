@@ -4,7 +4,7 @@
 # ///
 """Exports a prepared color image dataset (ml/prepare_*.py) as small files for phones.
 
-Usage: uv run --no-config ml/export_images.py games
+Usage: uv run --no-config ml/export_images.py games   (or brainrot)
 
 Writes public/data/<name>-train-{0..}.bin (class-balanced slices, one per phone),
 <name>-test.bin (held-out images for accuracy, up to 100 per class) and <name>-display.bin
@@ -26,6 +26,10 @@ DATASETS = {
               "classes": ["fortnite", "minecraft", "among_us", "roblox", "terraria", "valorant", "cs2", "dota2", "league"],
               # Hand-picked for being recognizable on screen: class -> position in its test images.
               "display": {"minecraft": 18, "fortnite": 109, "among_us": 109, "cs2": 177}},
+    # Small dataset: one slice with 122 images per character (the smallest class), ~1.9 MB.
+    "brainrot": {"cache": "ml/data/cache/brainrot64.npz", "slices": 1, "per_class": 122,
+                 "classes": ["ballerina_cappuccina", "bombardino_crocodilo", "cappuccino_assassino", "tralalero_tralala", "tung_tung_sahur"],
+                 "display": {"ballerina_cappuccina": 13, "bombardino_crocodilo": 13, "cappuccino_assassino": 6, "tralalero_tralala": 4}},
 }
 
 
