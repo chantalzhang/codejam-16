@@ -30,6 +30,21 @@ h1 { font-size: 22px; font-weight: 500; letter-spacing: -.4px; margin: 0; }
 .run-premise { margin: 0; color: #bac4cb; font-size: 15px; line-height: 1.6; }
 .run-premise strong { color: var(--orange); font-weight: 500; }
 .run-status { color: var(--green); font-size: 11px; }
+.run-controls { display: flex; align-items: center; gap: 24px; }
+.task-picker { display: flex; border: 1px solid var(--line); }
+.task-option { position: relative; display: flex; align-items: center; gap: 8px; border: 0; border-right: 1px solid var(--line); padding: 6px 12px 6px 6px; font-size: 12px; color: #9ca8b1; }
+.task-option:last-child { border-right: 0; }
+.task-option > img { width: 28px; height: 28px; image-rendering: pixelated; opacity: .7; }
+.task-option[aria-pressed=true] { background: #1d2326; color: var(--text); box-shadow: inset 0 -2px var(--green); }
+.task-option[aria-pressed=true] > img { opacity: 1; }
+.task-option:disabled { opacity: 1; cursor: default; }
+.task-option:disabled:not([aria-pressed=true]) { opacity: .35; }
+/* Hover preview: the task's 4 test images and what it's about. */
+.task-preview { position: absolute; top: calc(100% + 8px); right: 0; z-index: 4; width: 300px; padding: 12px; background: var(--bg); border: 1px solid var(--line); text-align: left; pointer-events: none; opacity: 0; transform: translateY(-4px); transition: opacity .15s, transform .15s; }
+.task-option:hover .task-preview, .task-option:focus-visible .task-preview { opacity: 1; transform: none; }
+.task-preview-images { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.task-preview-images img { width: 100%; aspect-ratio: 1; image-rendering: pixelated; }
+.task-preview p { margin: 10px 0 0; color: #aab4bb; font-size: 11px; line-height: 1.5; white-space: normal; }
 .run-status:before, .worker-state:before { content: ''; display: inline-block; width: 4px; height: 4px; background: currentColor; margin-right: 8px; }
 .monitor-layout { display: grid; grid-template-columns: minmax(0, 1fr) 246px; gap: 34px; }
 .plots { min-width: 0; }

@@ -29,6 +29,13 @@ try {
   assert.equal(await page.locator('#worker-count').textContent(), '0');
   assert.equal(await page.locator('label').filter({ has: page.locator('#batch-size') }).textContent(), 'Images per phone per step ');
   assert.equal(await page.locator('#task').inputValue(), 'guess-the-game-v1');
+  // The picture buttons at the top pick between the image tasks.
+  await page.waitForFunction(() => document.querySelectorAll('.task-option').length === 3);
+  await page.locator('#dev-toggle').click(); // The Dev panel covers the top right.
+  await page.locator('.task-option[data-task="italian-brainrot-v1"]').click();
+  assert.equal(await page.locator('#task').inputValue(), 'italian-brainrot-v1');
+  assert.equal(await page.locator('.task-option[data-task="italian-brainrot-v1"]').getAttribute('aria-pressed'), 'true');
+  await page.locator('#dev-toggle').click();
   await page.locator('#task').selectOption('linear-function-v1');
 
   async function addWorker(backend = 'webgl') {
