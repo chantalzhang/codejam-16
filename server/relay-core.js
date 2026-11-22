@@ -16,6 +16,7 @@ export function createRelay() {
   const workers = new Map(); // id → { send, ready, backend, tasks, device, note }
   let coordinator = null; // { id, send }
   let pending = null; // The round in progress, see startRound.
+  let workersJoined = 0; // Gives each worker a join number, e.g. to pick a data slice.
   const presence = () => coordinator?.send({
     type: 'presence',
     workers: [...workers].map(([id, { ready, backend, tasks, device, note }]) => ({ id, ready, backend, tasks, device, note })),
@@ -114,7 +115,7 @@ export function createRelay() {
           role = message.role;
           if (role === 'coordinator') coordinator = { id, send };
           else workers.set(id, { send, ready: false });
-          send({ type: 'welcome', id, role });
+          send({ type: 'welcome', id, role, ...(role === 'worker' && { joinNumber: workersJoined++ }) });
           presence();
         } else if (role === 'worker' && message.type === 'ready') {
           if (!['webgl', 'webgpu', 'cpu'].includes(message.backend) || !Array.isArray(message.tasks) ||
