@@ -192,6 +192,30 @@ try {
   await page.waitForFunction(() => /GPU reset/.test(document.querySelector('#workers .card.left .state')?.textContent));
   await readyWorkers(1);
 
+  // A phone that loses its connection mid-run (wifi blip, locked screen) reconnects by itself
+  // and trains again from a later round.
+  const flaky = await browser.newPage();
+  flaky.on('pageerror', error => errors.push(error.message));
+  await flaky.addInitScript(() => {
+    window.sockets = [];
+    window.WebSocket = class extends WebSocket {
+      constructor(...args) { super(...args); window.sockets.push(this); }
+    };
+  });
+  await flaky.goto(`${base}?role=worker&backend=webgl`);
+  await readyWorkers(2);
+  await page.locator('#start').click();
+  await page.waitForFunction(() => parseInt(document.querySelector('#round').textContent) >= 2);
+  await flaky.evaluate(() => window.sockets[0].close());
+  await flaky.waitForFunction(() => window.sockets.length === 2 && window.sockets[1].readyState === WebSocket.OPEN);
+  const roundAtReconnect = await roundNow();
+  await page.waitForFunction(start => parseInt(document.querySelector('#round').textContent) >= start + 5, roundAtReconnect);
+  await page.locator('#stop').click();
+  const reconnected = await savedRun();
+  assert.ok(reconnected.history.slice(-3).every(point => point.updates.length === 2), 'The reconnected phone trains again');
+  await flaky.close();
+  await readyWorkers(1);
+
   // A phone without WebGPU sits out instead of risking a freeze.
   const oldPhone = await browser.newPage({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15' });
   await oldPhone.addInitScript(() => Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined }));
@@ -219,7 +243,7 @@ try {
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
     screenshot: join(process.env.RUNS_DIR, 'laptop.png'),
-    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, and image tasks passed.',
+    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, reconnect, and image tasks passed.',
   }, null, 2));
 } finally {
   await browser?.close();

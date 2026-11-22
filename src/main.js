@@ -137,7 +137,7 @@ function flashGrid({ round, updates }) {
   for (const { workerId, computeMs } of updates) {
     const cell = cells.get(workerId);
     if (!cell) continue;
-    cell.classList.remove('training', 'landed-a', 'landed-b');
+    cell.classList.remove('training', 'dropped', 'landed-a', 'landed-b');
     cell.style.animationDelay = `${Math.round(computeMs / slowest * 300)}ms`;
     cell.classList.add(round % 2 ? 'landed-a' : 'landed-b'); // Alternating restarts the animation.
   }
@@ -246,9 +246,9 @@ function showProgress(point, history) {
   $('loss').textContent = point.loss.toPrecision(4);
   $('accuracy').textContent = point.accuracy === undefined ? '—' : `${(point.accuracy * 100).toFixed(1)}%`;
   $('elapsed').textContent = `${(point.elapsedMs / 1000).toFixed(1)} s`;
-  // Workers that missed the deadline or failed this round are out of the run.
+  // Workers that missed the deadline or failed sit out a few rounds, then try again.
   for (const { workerId, reason } of point.dropped) {
-    workerInfo(workerId).error ??= `dropped: ${reason}`;
+    workerInfo(workerId).error = `sitting out a round: ${reason}`;
     cells.get(workerId)?.classList.add('dropped');
   }
   if (point.dropped.length) showWorkers();
@@ -472,6 +472,7 @@ function handleGpuReset() {
   if (socket.readyState === WebSocket.OPEN) {
     send({ type: 'worker-error', runId: currentRound?.runId, round: currentRound?.round, error });
   }
+  stayClosed = true;
   socket.close();
 }
 
@@ -497,7 +498,7 @@ function receive(message) {
   if (message.type === 'round-result') {
     for (const { workerId, count, computeMs, memory } of message.updates) {
       const info = workerInfo(workerId);
-      Object.assign(info, { activity: `round ${message.round} done`, computeMs, memory });
+      Object.assign(info, { activity: `round ${message.round} done`, computeMs, memory, error: undefined });
       info.examples += count;
     }
     flashGrid(message);
@@ -509,21 +510,15 @@ function receive(message) {
   }
 }
 
-async function initialize() {
-  backend = await initializeBackend(role === 'worker' ? preferredBackend : 'webgl');
-  onGpuReset(handleGpuReset);
-  if (role === 'worker') {
-    void keepScreenOn();
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) void keepScreenOn(); });
-    document.addEventListener('pointerdown', () => void keepScreenOn());
-  }
-  if (role === 'coordinator') {
-    showTask();
-    void resetModel();
-  }
+// Connects to the relay. Phones call this again after losing the connection.
+let queue = Promise.resolve(); // Round assignments, one at a time.
+let stayClosed = false, retryMs = 1000, reconnectTimer;
+function connect() {
   socket = new WebSocket(relayUrl);
-  socket.addEventListener('open', () => send({ type: 'join', role }));
-  let queue = Promise.resolve();
+  socket.addEventListener('open', () => {
+    retryMs = 1000;
+    send({ type: 'join', role });
+  });
   socket.addEventListener('message', event => {
     const message = JSON.parse(event.data);
     if (message.type === 'welcome') {
@@ -551,10 +546,9 @@ async function initialize() {
     } else if (role === 'worker' && message.type === 'round') {
       // Serialize assignments so a late old round cannot mutate a newer round's model.
       queue = queue.then(() => work(message)).catch(error => {
+        if (socket.readyState !== WebSocket.OPEN) return; // Reconnecting: this round is lost anyway.
         $('worker-status').textContent = `Failed: ${error.message}`;
-        if (socket.readyState === WebSocket.OPEN) {
-          send({ type: 'worker-error', runId: message.runId, round: message.round, error: error.message });
-        }
+        send({ type: 'worker-error', runId: message.runId, round: message.round, error: error.message });
       });
     } else if (role === 'worker' && message.type === 'status') {
       void showStatus(message);
@@ -571,16 +565,47 @@ async function initialize() {
   socket.addEventListener('close', () => {
     connected = false;
     trainer?.stop('Relay disconnected.');
+    refreshControls();
+    // Phones reconnect by themselves (wifi blips, locked screens) and rejoin from the next
+    // round, unless the person tapped Disconnect or the GPU reset.
+    if (role === 'worker' && !stayClosed) {
+      phoneState('Reconnecting', { inactive: true });
+      $(connectionId).textContent = 'Connection lost. Reconnecting…';
+      reconnectTimer = setTimeout(connect, retryMs);
+      retryMs = Math.min(retryMs * 2, 10_000);
+      return;
+    }
     $(connectionId).textContent = 'Disconnected. Reload this page to reconnect.';
     if (role === 'worker') {
       phoneState('Disconnected', { inactive: true });
       $('disconnect').disabled = true;
     }
-    refreshControls();
   });
   socket.addEventListener('error', () => {
     $(connectionId).textContent = 'Connection failed. Is npm start running?';
   });
+}
+
+async function initialize() {
+  backend = await initializeBackend(role === 'worker' ? preferredBackend : 'webgl');
+  onGpuReset(handleGpuReset);
+  if (role === 'worker') {
+    void keepScreenOn();
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return;
+      void keepScreenOn();
+      if (reconnectTimer && socket.readyState === WebSocket.CLOSED) {
+        clearTimeout(reconnectTimer);
+        connect();
+      }
+    });
+    document.addEventListener('pointerdown', () => void keepScreenOn());
+  }
+  if (role === 'coordinator') {
+    showTask();
+    void resetModel();
+  }
+  connect();
   if (role === 'coordinator') showWorkers();
 }
 
@@ -661,6 +686,7 @@ $('task').addEventListener('change', () => {
 $('stop').addEventListener('click', () => trainer.stop());
 $('disconnect').addEventListener('click', () => {
   $('worker-status').textContent = 'Disconnected. Reload this page to rejoin.';
+  stayClosed = true;
   socket?.close();
 });
 // Redraw when the layout changes: window resized, or web fonts finished loading.

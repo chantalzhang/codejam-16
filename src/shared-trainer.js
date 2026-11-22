@@ -29,14 +29,14 @@ export class SharedTrainer {
     this.pending = null;
   }
 
-  // The relay sends one result per round: the average change and who was dropped.
+  // The relay sends one result per round: the average change (null if no worker sent a
+  // usable one, e.g. a wifi blip) and who was dropped.
   receive(message) {
     const pending = this.pending;
     if (message.type !== 'round-result' || !pending || this.active?.cancelReason ||
         message.runId !== this.active?.id || message.round !== pending.round) return;
     if (!message.delta) {
-      const reasons = message.dropped.map(({ reason }) => reason).join('; ');
-      pending.reject(new Error(`No worker sent a usable update (${reasons}).`));
+      pending.resolve({ average: null, updates: message.updates, dropped: message.dropped });
       return;
     }
     try {
@@ -113,6 +113,10 @@ export class SharedTrainer {
     };
     this.active = run;
     const lastPicked = new Map(); // workerId → last round it trained in
+    // Dropped workers sit out a few rounds, then try again: 1 round, then 2, 4… (up to 16)
+    // if they keep failing, so a stuck phone can't stall every round until the deadline.
+    const strikes = new Map(); // workerId → drops in a row
+    const benchedUntil = new Map(); // workerId → last round it sits out
     const buffers = this.task.variables.map(variable => tf.tidy(() => tf.variable(tf.zerosLike(variable), false)));
     const started = performance.now();
     const checkCancelled = () => { if (run.cancelReason) throw new Error(run.cancelReason); };
@@ -137,7 +141,8 @@ export class SharedTrainer {
         if (!run.workerIds.length) throw new Error('Every worker left.');
         // With a huge crowd, each round uses the workers that have waited longest, so everyone
         // takes turns. Sort is stable: ties keep join order.
-        const picked = [...run.workerIds]
+        const rested = run.workerIds.filter(id => (benchedUntil.get(id) ?? 0) < round);
+        const picked = [...(rested.length ? rested : run.workerIds)]
           .sort((a, b) => (lastPicked.get(a) ?? 0) - (lastPicked.get(b) ?? 0))
           .slice(0, maxWorkersPerRound);
         for (const id of picked) lastPicked.set(id, round);
@@ -149,9 +154,15 @@ export class SharedTrainer {
           run, round, assignments, weights, round === 1 ? 4 * deadlineMs : deadlineMs);
         const waitMs = performance.now() - waitStarted;
         checkCancelled();
-        run.workerIds = run.workerIds.filter(id => !dropped.some(item => item.workerId === id));
+        for (const { workerId } of updates) strikes.delete(workerId);
+        for (const { workerId } of dropped) {
+          const count = (strikes.get(workerId) ?? 0) + 1;
+          strikes.set(workerId, count);
+          benchedUntil.set(workerId, round + Math.min(2 ** (count - 1), 16));
+        }
         // Nesterov, same formula as torch.optim.SGD: buf = m * buf + g; w -= lr * (g + m * buf).
-        tf.tidy(() => this.task.variables.forEach((variable, i) => {
+        // A round with no usable update leaves the model as it was.
+        if (average) tf.tidy(() => this.task.variables.forEach((variable, i) => {
           const gradient = tf.tensor(average[i], variable.shape, 'float32').neg();
           buffers[i].assign(buffers[i].mul(outerMomentum).add(gradient));
           variable.assign(variable.sub(gradient.add(buffers[i].mul(outerMomentum)).mul(outerLearningRate)));
