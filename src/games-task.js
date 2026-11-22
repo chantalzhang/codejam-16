@@ -13,6 +13,7 @@ export default imageTask({
   slices: 10,
   defaults: {
     rounds: 1000, batchSize: 32, localSteps: 10, optimizer: 'adam', learningRate: 0.01,
-    outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: 0.8, timeLimitSeconds: 120,
+    // A fixed 50 s run with no target: more phones see more of the data and end higher.
+    outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: null, timeLimitSeconds: 50,
   },
 });
