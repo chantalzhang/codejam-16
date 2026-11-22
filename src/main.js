@@ -52,6 +52,9 @@ function showProgress(point, history) {
   $('loss').textContent = point.loss.toPrecision(4);
   $('accuracy').textContent = point.accuracy === undefined ? '—' : `${(point.accuracy * 100).toFixed(1)}%`;
   $('elapsed').textContent = `${(point.elapsedMs / 1000).toFixed(1)} s`;
+  // Workers that missed the deadline or failed this round are out of the run.
+  for (const { workerId, reason } of point.dropped) workerInfo(workerId).error ??= `dropped: ${reason}`;
+  if (point.dropped.length) showWorkers();
   const timing = timingSummary(history);
   for (const [key, id] of Object.entries(TIMING_IDS)) $(id).textContent = timing ? formatMs(timing[key]) : '—';
 }
