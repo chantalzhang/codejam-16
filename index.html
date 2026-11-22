@@ -4,14 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#111315" />
-    <title>GPUmaxxing</title>
+    <title>GPUmaxxer</title>
   </head>
   <body>
     <main class="layout">
       <!-- Big screen (?role=laptop): coordinates the run. -->
       <section id="coordinator" class="projector-preview" aria-label="Training monitor" hidden>
         <header class="run-header">
-          <div class="run-heading"><h1>GPUmaxxing</h1><p class="run-premise"><strong id="header-workers">0</strong> <span id="premise-text">phones ready</span></p></div>
+          <div class="run-heading"><h1>GPUmaxxer</h1><p class="run-premise"><strong id="header-workers">0</strong> <span id="premise-text">phones ready</span></p></div>
           <span id="room-status" class="run-status">Waiting for phones</span>
         </header>
         <p id="run-result" class="run-result" hidden></p>
@@ -36,6 +36,9 @@
 
           <aside class="run-info">
             <div class="worker-count"><span>Phones online</span><strong id="room-workers">0</strong><span id="latest-join" class="latest-join"></span></div>
+            <!-- One square per phone; it flashes when that phone's update lands in a round. -->
+            <div class="phone-grid" id="phone-grid" aria-hidden="true"></div>
+            <div class="room-speed"><span>Room speed</span><strong id="room-speed">—</strong><span id="room-total" class="latest-join">examples per second, all phones together</span></div>
             <dl class="run-stats">
               <div><dt>Elapsed</dt><dd id="room-elapsed">—</dd></div>
               <div><dt>Round</dt><dd id="room-step">—</dd></div>
@@ -64,7 +67,6 @@
         </dialog>
 
         <footer class="control-bar">
-          <span>Laptop · keep this tab visible during runs</span>
           <div><button id="start" disabled>Start fresh run</button><button id="stop" disabled>Stop</button><button id="dev-toggle" aria-expanded="false" aria-controls="dev-panel">Dev</button></div>
         </footer>
 
@@ -104,8 +106,15 @@
 
       <!-- Phone (plain link): trains its share each round. -->
       <section id="worker" class="phone-preview" aria-label="Phone" hidden>
-        <header class="phone-header"><h1>GPUmaxxing</h1><span id="worker-state" class="worker-state">Connecting</span></header>
-        <p class="phone-team" id="phone-team" hidden><strong id="phone-workers">0</strong> <span id="phone-team-text">phones · one shared model</span></p>
+        <header class="phone-header"><h1>GPUmaxxer</h1><span id="worker-state" class="worker-state">Connecting</span></header>
+        <p class="phone-team" id="phone-team" hidden><strong id="phone-workers">0</strong> <span id="phone-team-text">phones · one shared model</span><span id="phone-room-speed" class="phone-room-speed"></span></p>
+
+        <!-- The stages of this phone's current round, as they happen. -->
+        <section class="phone-live" id="phone-live" hidden>
+          <div class="phone-live-heading"><span id="phone-round">Round —</span><span id="phone-gpu"></span></div>
+          <ol class="phase-strip"><li data-phase="receive">Got model</li><li data-phase="train">Training on GPU</li><li data-phase="send">Sent update</li></ol>
+          <p class="phase-detail" id="phone-detail"></p>
+        </section>
         <p class="phone-summary" id="phone-summary" hidden></p>
 
         <section class="phone-prediction prediction-sample" id="phone-prediction" aria-label="Shared model prediction on a fixed test image" hidden>
@@ -116,7 +125,7 @@
           <dl class="prediction-comparison" hidden><div><dt>Initial</dt><dd class="first-guess"></dd></div><div><dt>Final</dt><dd class="final-guess"></dd></div></dl>
         </section>
 
-        <div class="contribution"><strong id="examples">0</strong><span>Examples processed by your phone</span></div>
+        <div class="contribution"><strong id="examples">0</strong><span>Examples processed by your phone</span><span id="phone-share" class="phone-share"></span></div>
         <section class="phone-rate" id="phone-rate" aria-labelledby="phone-rate-title" hidden>
           <div class="phone-rate-heading"><h2 id="phone-rate-title">Your training speed</h2><span id="phone-rate-value">— examples/s</span></div>
           <svg id="phone-rate-chart" viewBox="0 0 360 48" preserveAspectRatio="none" role="img" aria-label="This phone's training speed in examples per second over the last 30 seconds"></svg>

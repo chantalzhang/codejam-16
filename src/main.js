@@ -6,6 +6,7 @@ import { createOptimizer, packValues, trainLocally, unpackValues } from './tenso
 import { tasks } from './tasks.js';
 import { clock, drawLossChart, drawProbabilityHistory, drawRateSparkline } from './ui/charts.js';
 import { imageUrl } from './ui/images.js';
+import { bump, countTo } from './ui/motion.js';
 import { createCard, guessChanges, resultSummary, updateCard, winner } from './ui/predictions.js';
 
 const $ = id => document.getElementById(id);
@@ -66,7 +67,10 @@ function send(message) {
   if (socket.readyState !== WebSocket.OPEN) throw new Error('Relay is disconnected. Reload to reconnect.');
   socket.send(JSON.stringify(message));
   if (message.type === 'round') {
-    for (const { workerId } of message.assignments) workerInfo(workerId).activity = `training round ${message.round}`;
+    for (const { workerId } of message.assignments) {
+      workerInfo(workerId).activity = `training round ${message.round}`;
+      cells.get(workerId)?.classList.add('training');
+    }
     showWorkers();
   }
 }
@@ -75,7 +79,7 @@ function send(message) {
 
 // Big-screen state for the current run. display holds the task's fixed held-out images and
 // the model's probabilities on them at each evaluation, starting with the untrained model.
-let screen = { points: [], display: null };
+let screen = { points: [], display: null, speed: null, total: 0 };
 let roomState = 'waiting';
 
 function status(message) { $('status').textContent = message; }
@@ -90,8 +94,49 @@ const TIMING_IDS = { roundMs: 'round-time', computeMs: 'compute-time', networkMs
 const readyPhones = () => workers.filter(canRun).length;
 const correctCount = evaluation => evaluation.filter((probabilities, i) => winner(probabilities) === screen.display.examples[i].label).length;
 
+// The room's measured training speed: examples per second over the last 3 rounds,
+// skipping round 1 (downloads and GPU warm-up).
+function roomSpeed(history) {
+  const recent = history.filter(point => point.round > 1).slice(-4);
+  if (recent.length < 2) return null;
+  const examples = recent.slice(1).reduce((sum, point) => sum + point.updates.reduce((total, update) => total + update.count, 0), 0);
+  return examples / ((recent.at(-1).elapsedMs - recent[0].elapsedMs) / 1000);
+}
+
+// One square per phone that can train, in join order. Phones that leave fade out.
+const cells = new Map();
+function showGrid() {
+  const ids = workers.filter(canRun).map(worker => worker.id);
+  for (const [id, cell] of cells) {
+    if (ids.includes(id)) continue;
+    cells.delete(id);
+    cell.classList.add('gone');
+    setTimeout(() => cell.remove(), 600);
+  }
+  for (const id of ids) {
+    if (cells.has(id)) continue;
+    const cell = document.createElement('i');
+    cells.set(id, cell);
+    $('phone-grid').append(cell);
+  }
+  // Smaller squares for bigger rooms, so 500 phones still fit in a few rows.
+  $('phone-grid').style.setProperty('--cell', `${ids.length > 150 ? 4 : ids.length > 50 ? 6 : 9}px`);
+}
+// Each phone's square flashes when its update lands, earlier for phones that computed faster.
+function flashGrid({ round, updates }) {
+  const slowest = Math.max(...updates.map(update => update.computeMs));
+  for (const { workerId, computeMs } of updates) {
+    const cell = cells.get(workerId);
+    if (!cell) continue;
+    cell.classList.remove('training', 'landed-a', 'landed-b');
+    cell.style.animationDelay = `${Math.round(computeMs / slowest * 300)}ms`;
+    cell.classList.add(round % 2 ? 'landed-a' : 'landed-b'); // Alternating restarts the animation.
+  }
+}
+
 function showRoom() {
   const phones = readyPhones();
+  if (String(phones) !== $('room-workers').textContent) bump($('room-workers'));
   $('header-workers').textContent = $('room-workers').textContent = phones;
   $('premise-text').textContent = `phone${phones === 1 ? '' : 's'} ${roomState === 'training' ? 'training one shared model' : 'ready'}`;
   $('room-status').textContent = { waiting: phones ? 'Ready' : 'Waiting for phones', training: 'Training', done: 'Done' }[roomState];
@@ -106,25 +151,36 @@ function showScreen({ done = false } = {}) {
   $('room-step').textContent = latest ? latest.round : '—';
   $('comparison-time').textContent = latest ? `round ${latest.round} · t=${latest.seconds.toFixed(1)}s` : '';
   const display = screen.display;
-  const lossHeight = drawLossChart($('loss-chart'), screen.points, display?.examples.length);
   $('coordinator').classList.toggle('run-complete', done);
-  if (!display?.history.length) return;
-  const { examples, history, classes } = display;
-  const total = examples.length;
-  const correct = correctCount(history.at(-1));
-  [...$('predictions').children].forEach((card, image) =>
-    updateCard(card, history.at(-1)[image], guessChanges(history, image), classes, { done }));
-  $('predictions-panel').classList.toggle('has-errors', correct < total);
-  $('correct-count').textContent = `${correct} / ${total} correct`;
-  if (done) $('prediction-title').replaceChildren(resultSummary(correctCount(history[0]), correct, total));
-  $('evaluation-count').textContent = `${history.length} evals`;
-  drawProbabilityHistory($('probability-chart'), history, examples.map(example => example.label), classes, lossHeight);
+  if (display?.history.length) {
+    const { examples, history, classes } = display;
+    const total = examples.length;
+    const correct = correctCount(history.at(-1));
+    [...$('predictions').children].forEach((card, image) =>
+      updateCard(card, history.at(-1)[image], guessChanges(history, image), classes, { done }));
+    $('predictions-panel').classList.toggle('has-errors', correct < total);
+    $('correct-count').textContent = `${correct} / ${total} correct`;
+    if (done) $('prediction-title').replaceChildren(resultSummary(correctCount(history[0]), correct, total));
+    $('evaluation-count').textContent = `${history.length} evals`;
+  }
+  // Fit the charts above the control bar (after the cards above them are filled in).
+  // Positions are in screen pixels, sizes in zoomed ones.
+  const zoom = Number(getComputedStyle(document.body).zoom) || 1;
+  const space = (innerHeight - $('loss-chart').getBoundingClientRect().top - scrollY) / zoom - 72;
+  const lossHeight = drawLossChart($('loss-chart'), screen.points, display?.examples.length, space);
+  if (display?.history.length) {
+    drawProbabilityHistory($('probability-chart'), display.history, display.examples.map(example => example.label), display.classes, lossHeight);
+  }
 }
 
 // Shows the task's fixed held-out images with the (untrained) model's guesses, or hides the
 // prediction panels for tasks without images.
 async function resetScreen() {
-  screen = { points: [], display: null };
+  screen = { points: [], display: null, speed: null, total: 0 };
+  $('room-speed').textContent = '—';
+  delete $('room-speed').dataset.value;
+  $('room-total').textContent = 'examples per second, all phones together';
+  for (const cell of cells.values()) cell.className = '';
   $('room-task').textContent = selected.classes ? `${selected.name} · ${selected.classes.length} classes` : selected.name;
   $('prediction-title').replaceChildren('Test predictions ', Object.assign(document.createElement('span'), {
     className: 'prediction-note', textContent: 'Fixed held-out images · class probabilities',
@@ -145,14 +201,15 @@ async function resetScreen() {
 
 // Phones show the room's state and the shared model's guesses. Sent at most twice a second,
 // since a wave of joins would otherwise send one per join to every phone.
-let statusTimer, runResult;
+let statusTimer, phoneResult;
 function scheduleStatus() {
   statusTimer ??= setTimeout(() => {
     statusTimer = undefined;
     if (socket?.readyState !== WebSocket.OPEN) return;
     const history = screen.display?.history;
     send({
-      type: 'status', state: roomState, phones: readyPhones(), taskId: selected.taskId, result: runResult,
+      type: 'status', state: roomState, phones: readyPhones(), taskId: selected.taskId, result: phoneResult,
+      runId: screen.runId, speed: screen.speed, total: screen.total,
       display: history?.at(-1).map((probabilities, image) => ({
         probabilities: probabilities.map(value => Math.round(value * 1000) / 1000),
         guesses: guessChanges(history, image),
@@ -162,6 +219,11 @@ function scheduleStatus() {
 }
 
 function showProgress(point, history) {
+  screen.runId = trainer.active.id;
+  screen.speed = roomSpeed(history);
+  screen.total += point.updates.reduce((sum, update) => sum + update.count, 0);
+  if (screen.speed) countTo($('room-speed'), screen.speed);
+  $('room-total').textContent = `examples/s · ${screen.total.toLocaleString('en-US')} examples trained`;
   screen.points.push({ round: point.round, seconds: point.elapsedMs / 1000, loss: point.loss, accuracy: point.accuracy });
   if (screen.display && point.display) {
     // Round 0 is the untrained model, which replaces the preview shown before the run.
@@ -176,7 +238,10 @@ function showProgress(point, history) {
   $('accuracy').textContent = point.accuracy === undefined ? '—' : `${(point.accuracy * 100).toFixed(1)}%`;
   $('elapsed').textContent = `${(point.elapsedMs / 1000).toFixed(1)} s`;
   // Workers that missed the deadline or failed this round are out of the run.
-  for (const { workerId, reason } of point.dropped) workerInfo(workerId).error ??= `dropped: ${reason}`;
+  for (const { workerId, reason } of point.dropped) {
+    workerInfo(workerId).error ??= `dropped: ${reason}`;
+    cells.get(workerId)?.classList.add('dropped');
+  }
   if (point.dropped.length) showWorkers();
   const timing = timingSummary(history);
   for (const [key, id] of Object.entries(TIMING_IDS)) $(id).textContent = timing ? formatMs(timing[key]) : '—';
@@ -258,6 +323,7 @@ function showWorkers() {
   }
   for (const worker of workers.filter(canRun)) trainer?.addWorker(worker.id);
   refreshControls();
+  showGrid();
   showRoom();
 }
 function snapshot(id) {
@@ -287,11 +353,16 @@ function phoneState(label, { inactive = false } = {}) {
 // The laptop's status: room state, phone count, and the model's guess on one shown image
 // (picked by join order, so neighbors see different ones).
 let phoneExample;
-async function showStatus({ state, phones, taskId, result, display }) {
+async function showStatus({ state, phones, taskId, result, display, runId, speed, total }) {
   if (!socket || socket.readyState !== WebSocket.OPEN || sittingOut) return;
   phoneState({ waiting: 'Waiting', training: 'Training', done: 'Done' }[state], { inactive: state !== 'training' });
   $('phone-team').hidden = false;
+  if (String(phones) !== $('phone-workers').textContent) bump($('phone-workers'));
   $('phone-workers').textContent = phones;
+  $('phone-room-speed').textContent = speed ? ` · ${Math.round(speed).toLocaleString('en-US')} examples/s together` : '';
+  const mine = runId && workerRun?.id === runId ? workerRun.examples : 0;
+  $('phone-share').textContent = mine && total
+    ? `${(Math.min(mine / total, 1) * 100).toFixed(1)}% of the room's ${total.toLocaleString('en-US')} examples` : '';
   $('phone-team-text').textContent = `phone${phones === 1 ? '' : 's'} · one shared model`;
   $('phone-summary').hidden = state !== 'done' || !result;
   $('phone-summary').textContent = result ?? '';
@@ -327,6 +398,21 @@ function showRate(examples, computeMs) {
   drawRateSparkline($('phone-rate-chart'), rateSamples, seconds);
 }
 
+// The current round's stage on the phone: receive → train → send.
+function showPhase(phase, detail) {
+  $('phone-live').hidden = false;
+  for (const item of $('phone-live').querySelectorAll('[data-phase]')) {
+    item.classList.toggle('active', item.dataset.phase === phase);
+  }
+  $('phone-detail').textContent = detail;
+}
+
+// This phone's GPU, e.g. "iPhone · Apple GPU · WebGPU" (browsers may hide the vendor).
+async function gpuLabel() {
+  const vendor = backend === 'webgpu' ? (await navigator.gpu.requestAdapter())?.info?.vendor : null;
+  return [deviceName(), vendor && `${vendor[0].toUpperCase()}${vendor.slice(1)} GPU`, backendLabel(backend)].filter(Boolean).join(' · ');
+}
+
 // Workers create each task the first time the coordinator asks for it.
 const workerTasks = new Map();
 let joinNumber; // From the relay: this worker's place in join order.
@@ -352,16 +438,20 @@ async function work(message) {
     workerRun?.optimizer.dispose();
     workerRun = { id: message.runId, optimizer: createOptimizer(message.optimizer, message.learningRate), examples: 0 };
   }
+  $('phone-round').textContent = `Round ${round}`;
+  showPhase('receive', 'Got the shared model');
   const weights = unpackValues(message.weights, task.variables);
+  showPhase('train', `Training ${localSteps} steps on ${count * localSteps} images…`);
   const result = await trainLocally(task, workerRun.optimizer, weights, message);
   const memory = memoryUsage();
   workerRun.examples += count * localSteps;
-  $('examples').textContent = workerRun.examples.toLocaleString('en-US');
+  countTo($('examples'), workerRun.examples);
   showRate(count * localSteps, result.computeMs);
   $('compute').textContent = formatMs(result.computeMs);
   $('gpu-memory').textContent = formatBytes(memory.gpuBytes);
   $('tensors').textContent = memory.tensors;
   send({ type: 'update', runId: message.runId, round, count: count * localSteps, memory, ...result, delta: packValues(result.delta) });
+  showPhase('send', `Trained ${count * localSteps} images in ${formatMs(result.computeMs)}, sent the change`);
   currentRound = undefined;
 }
 
@@ -401,6 +491,7 @@ function receive(message) {
       Object.assign(info, { activity: `round ${message.round} done`, computeMs, memory });
       info.examples += count;
     }
+    flashGrid(message);
     trainer?.receive(message);
     showWorkers();
   } else if (message.type === 'worker-error') {
@@ -434,6 +525,8 @@ async function initialize() {
         const note = sitOutReason();
         sittingOut = Boolean(note);
         phoneState(note ? 'Sitting out' : 'Waiting', { inactive: true });
+        void gpuLabel().then(label => { $('phone-gpu').textContent = label; });
+        $('worker').querySelector('[data-phase=train]').textContent = `Training on ${backend === 'cpu' ? 'CPU' : 'GPU'}`;
         // A worker that sits out offers no tasks, so the laptop never gives it work.
         send({ type: 'ready', backend, device: deviceName(), note, tasks: note ? [] : tasks.map(({ taskId }) => taskId) });
         if (note) {
@@ -507,7 +600,7 @@ $('start').addEventListener('click', async () => {
   }
   const participants = workers.filter(canRun);
   roomState = 'training';
-  runResult = undefined;
+  phoneResult = undefined;
   await resetModel();
   $('saved').textContent = '';
   $('result').hidden = $('run-result').hidden = true;
@@ -526,10 +619,11 @@ $('start').addEventListener('click', async () => {
     if (ending) {
       const { accuracy, elapsedMs, workers: count } = ending;
       const [accuracyText, seconds, phones] = [(accuracy * 100).toFixed(1), (elapsedMs / 1000).toFixed(1), `${count} phone${count === 1 ? '' : 's'}`];
-      runResult = run.reachedTarget
+      $('result').textContent = $('run-result').textContent = run.reachedTarget
         ? `Reached ${accuracyText}% held-out accuracy in ${seconds} s with ${phones}`
         : `Time's up: ${accuracyText}% held-out accuracy after ${seconds} s with ${phones}`;
-      $('result').textContent = $('run-result').textContent = runResult;
+      // Phones get a short version.
+      phoneResult = run.reachedTarget ? `${accuracyText}% accuracy in ${seconds} s` : `Time's up: ${accuracyText}% accuracy`;
       $('result').hidden = $('run-result').hidden = false;
     }
     roomState = 'done';
@@ -560,7 +654,10 @@ $('disconnect').addEventListener('click', () => {
   $('worker-status').textContent = 'Disconnected. Reload this page to rejoin.';
   socket?.close();
 });
-addEventListener('resize', () => { if (role === 'coordinator') showScreen({ done: roomState === 'done' }); });
+// Redraw when the layout changes: window resized, or web fonts finished loading.
+const redraw = () => { if (role === 'coordinator') showScreen({ done: roomState === 'done' }); };
+addEventListener('resize', redraw);
+void document.fonts.ready.then(redraw);
 void initialize().catch(error => {
   $(connectionId).textContent = `Initialization failed: ${error.message}`;
 });
