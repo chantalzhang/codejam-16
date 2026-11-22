@@ -58,7 +58,7 @@ const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
 function refreshControls() {
   $('start').disabled = !connected || running || !workers.some(canRun);
   $('stop').disabled = !running;
-  for (const id of ['task', 'rounds', 'batch-size', 'local-steps']) $(id).disabled = running;
+  for (const id of ['task', 'rounds', 'batch-size', 'local-steps', 'target']) $(id).disabled = running;
 }
 const TIMING_IDS = { roundMs: 'round-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
 function showProgress(point, history) {
@@ -75,6 +75,7 @@ function showProgress(point, history) {
 function showTask() {
   $('task-note').textContent = selected.description;
   $('rounds').value = selected.defaults.rounds;
+  $('target').value = selected.defaults.targetAccuracy ? Math.round(selected.defaults.targetAccuracy * 100) : '';
   $('batch-size').value = selected.defaults.batchSize;
   $('local-steps').value = selected.defaults.localSteps;
 }
@@ -311,6 +312,12 @@ $('start').addEventListener('click', async () => {
     status('Choose whole numbers: rounds ≤ 10,000, images per step ≤ 1,000, local steps ≤ 100.');
     return;
   }
+  // Empty means no target: run every round.
+  const target = $('target').value === '' ? null : Number($('target').value) / 100;
+  if (target !== null && !(target > 0 && target <= 1)) {
+    status('Stop at accuracy must be between 1 and 100, or empty.');
+    return;
+  }
   // Fresh run: forget workers that left and clear last run's numbers.
   for (const [id, info] of infos) {
     if (!workers.some(worker => worker.id === id)) infos.delete(id);
@@ -320,6 +327,7 @@ $('start').addEventListener('click', async () => {
   running = true;
   resetModel();
   $('saved').textContent = '';
+  $('result').hidden = true;
   showWorkers();
   status(`Training one shared model with ${participants.length} worker(s)…`);
   try {
@@ -327,9 +335,16 @@ $('start').addEventListener('click', async () => {
       workerIds: participants.map(worker => worker.id), rounds, batchSize, localSteps,
       optimizer: selected.defaults.optimizer, learningRate: selected.defaults.learningRate,
       outerLearningRate: selected.defaults.outerLearningRate, outerMomentum: selected.defaults.outerMomentum,
+      targetAccuracy: target,
     });
     const outcome = { completed: 'Completed', stopped: 'Stopped', failed: 'Failed' }[run.outcome];
     status(`${outcome}: ${run.history.at(-1)?.round ?? 0} of ${rounds} rounds.${run.reason ? ' ' + run.reason : ''}`);
+    if (run.reachedTarget) {
+      const { accuracy, elapsedMs, workers: count } = run.reachedTarget;
+      $('result').textContent = `Reached ${(accuracy * 100).toFixed(1)}% accuracy in ${(elapsedMs / 1000).toFixed(1)} s ` +
+        `with ${count} phone${count === 1 ? '' : 's'}`;
+      $('result').hidden = false;
+    }
     await saveRun({
       ...run, timing: timingSummary(run.history), workers: run.participants.map(snapshot),
       coordinatorBackend: backend, userAgent: navigator.userAgent,

@@ -152,6 +152,13 @@ try {
   assert.ok(fashion.history.every(point => point.accuracy >= 0 && point.accuracy <= 1));
   assert.match(await page.locator('#accuracy').textContent(), /^\d+\.\d%$/);
 
+  // A low target stops the run early and shows the result banner.
+  await page.locator('#target').fill('20');
+  const early = await run(50, 8, 2);
+  assert.ok(early.reachedTarget && early.history.length < 51, 'Run did not stop at the target');
+  assert.match(await page.locator('#result').textContent(), /^Reached \d+\.\d% accuracy in \d+\.\d s with 2 phones$/);
+  await page.locator('#target').fill('');
+
   // Simulate a phone GPU reset mid-run: that worker drops out and the run keeps going.
   await page.locator('#task').selectOption('linear-function-v1');
   await page.locator('#rounds').fill('10000');
