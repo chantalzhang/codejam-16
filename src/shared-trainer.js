@@ -93,7 +93,7 @@ export class SharedTrainer {
 
   async train({
     workerIds, rounds, batchSize, localSteps, optimizer, learningRate,
-    outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000, maxWorkersPerRound = 100,
+    outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000, maxWorkersPerRound = 500,
   }) {
     if (this.active) throw new Error('A run is already active.');
     if (!workerIds.length || new Set(workerIds).size !== workerIds.length ||
@@ -129,9 +129,9 @@ export class SharedTrainer {
         const weights = await readValues(this.task.variables);
         checkCancelled();
         if (!run.workerIds.length) throw new Error('Every worker left.');
-        // With a crowd, each round uses the workers that have waited longest, so everyone
-        // takes turns. 100 per round kept rounds under 1.7x slower in scripts/load-test.js;
-        // 200 was 3.2x. Sort is stable: ties keep join order.
+        // With a huge crowd, each round uses the workers that have waited longest, so everyone
+        // takes turns. Since the relay adds up updates, 500 per round took ~1 s per round in
+        // scripts/load-test.js (2.5x one phone). Sort is stable: ties keep join order.
         const picked = [...run.workerIds]
           .sort((a, b) => (lastPicked.get(a) ?? 0) - (lastPicked.get(b) ?? 0))
           .slice(0, maxWorkersPerRound);
