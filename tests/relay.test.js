@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { attachRelay } from '../server/relay.js';
+import { packFloats, unpackFloats } from '../src/packing.js';
 
 async function connect(url, role) {
   const socket = new WebSocket(url.replace('http:', 'ws:') + '/swarm', { origin: url });
@@ -33,7 +34,7 @@ async function connect(url, role) {
   return { socket, send, next };
 }
 
-test('relay routes rounds and updates, assigns identity, and limits roles', async t => {
+test('relay fans out rounds, adds up updates, assigns identity, and limits roles', async t => {
   const server = createServer();
   const relay = attachRelay(server);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -59,21 +60,22 @@ test('relay routes rounds and updates, assigns identity, and limits roles', asyn
   assert.equal(presence.workers[0].note, 'sitting out');
 
   // One round message fans out: each assigned worker gets the model plus its own slice.
-  coordinator.send({ type: 'round', runId: 'run', round: 1, weights: 'AAAA', assignments: [
+  const weights = packFloats(new Float32Array([0, 0]));
+  coordinator.send({ type: 'round', runId: 'run', round: 1, localSteps: 1, deadlineMs: 5000, weights, assignments: [
     { workerId: welcome.id, offset: 0, count: 32 },
     { workerId: 'gone', offset: 32, count: 32 },
   ] });
   const step = await worker.next('round');
-  assert.deepEqual([step.runId, step.weights, step.offset, step.count, step.assignments], ['run', 'AAAA', 0, 32, undefined]);
-  // Assigned workers that aren't connected are reported so the laptop can drop them.
-  const gone = await coordinator.next('worker-error');
-  assert.deepEqual([gone.workerId, gone.round, gone.error], ['gone', 1, 'not connected']);
-  worker.send({ type: 'update', runId: 'run', round: 1, workerId: 'spoofed', delta: [[2]] });
-  const update = await coordinator.next('update');
-  assert.equal(update.workerId, welcome.id);
-  assert.deepEqual(update.delta, [[2]]);
+  assert.deepEqual([step.runId, step.weights, step.offset, step.count, step.assignments], ['run', weights, 0, 32, undefined]);
+  // The relay adds up updates and sends the laptop one result, naming who dropped out.
+  worker.send({ type: 'update', runId: 'run', round: 1, count: 32, delta: packFloats(new Float32Array([2, -2])), loss: 1, computeMs: 3 });
+  const result = await coordinator.next('round-result');
+  assert.deepEqual(Array.from(unpackFloats(result.delta)), [2, -2]);
+  assert.equal(result.updates[0].workerId, welcome.id);
+  assert.deepEqual(result.dropped, [{ workerId: 'gone', reason: 'not connected' }]);
 
-  worker.send({ type: 'worker-error', runId: 'run', step: 1, error: 'Computation failed' });
+  // Worker errors are passed on for the dev page.
+  worker.send({ type: 'worker-error', error: 'Computation failed' });
   const failure = await coordinator.next('worker-error');
   assert.equal(failure.workerId, welcome.id);
   assert.equal(failure.error, 'Computation failed');
@@ -87,8 +89,8 @@ test('relay routes rounds and updates, assigns identity, and limits roles', asyn
 
   worker.socket.close();
   assert.deepEqual((await coordinator.next('presence')).workers, []);
-  coordinator.send({ type: 'round', runId: 'run', round: 2, assignments: [{ workerId: welcome.id, offset: 0, count: 32 }] });
-  assert.equal((await coordinator.next('worker-error')).error, 'not connected');
+  coordinator.send({ type: 'round', runId: 'run', round: 2, localSteps: 1, deadlineMs: 5000, weights, assignments: [{ workerId: welcome.id, offset: 0, count: 32 }] });
+  assert.deepEqual((await coordinator.next('round-result')).dropped, [{ workerId: welcome.id, reason: 'not connected' }]);
   coordinator.send({ type: 'round' });
   assert.match((await coordinator.next('error')).error, /assignments/);
 

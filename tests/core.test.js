@@ -5,8 +5,9 @@ import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
 import * as imageTask from '../src/image-task.js';
 import { decode } from '../src/fashion-task.js';
-import { SharedTrainer, averageUpdates, timingSummary } from '../src/shared-trainer.js';
-import { assignValues, createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
+import { SharedTrainer, timingSummary } from '../src/shared-trainer.js';
+import { createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
+import { createRelay } from '../server/relay-core.js';
 
 await tf.setBackend('cpu');
 
@@ -17,43 +18,75 @@ function sameWeights(a, b) {
   a.forEach((values, tensor) => values.forEach((value, i) => closeTo(value, b[tensor][i])));
 }
 
-// The laptop sends one round message; split it per worker the way the relay does.
-function trainerWith(task, options) {
-  const send = message => {
-    for (const { workerId, offset, count } of message.assignments) options.send({ ...message, to: workerId, offset, count });
+// Wires a trainer to the real relay logic in-process, the way the laptop page and phones
+// connect over WebSockets. `behaviors[name](round, reply, worker)` decides how each worker
+// answers a round. Like the laptop page, workers that disconnect leave the run.
+function swarm(task, behaviors, options = {}) {
+  const relay = createRelay();
+  let trainer;
+  const laptop = relay.connect(text => {
+    const message = JSON.parse(text);
+    if (message.type === 'presence') {
+      for (const id of trainer.active?.workerIds ?? []) {
+        if (!message.workers.some(worker => worker.id === id)) trainer.removeWorker(id);
+      }
+    }
+    trainer.receive(message);
+  });
+  trainer = new SharedTrainer(task, { ...options, send: message => laptop.receive(JSON.stringify(message)) });
+  laptop.receive(JSON.stringify({ type: 'join', role: 'coordinator' }));
+  const ids = {};
+  const connections = {};
+  for (const [name, behavior] of Object.entries(behaviors)) {
+    const worker = { name };
+    const connection = relay.connect(text => {
+      const message = JSON.parse(text);
+      if (message.type === 'welcome') ids[name] = message.id;
+      if (message.type !== 'round') return;
+      const reply = answer => connection.receive(JSON.stringify({ runId: message.runId, round: message.round, ...answer }));
+      behavior(message, reply, worker);
+    });
+    connection.receive(JSON.stringify({ type: 'join', role: 'worker' }));
+    connection.receive(JSON.stringify({ type: 'ready', backend: 'cpu', tasks: [task.id] }));
+    connections[name] = connection;
+  }
+  const names = id => Object.keys(ids).find(name => ids[name] === id);
+  const settings = { batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 };
+  return {
+    trainer, ids, connections, names,
+    train: overrides => trainer.train({ workerIds: Object.values(ids), rounds: 1, ...settings, ...overrides }),
   };
-  return new SharedTrainer(task, { ...options, send });
 }
 
-// Runs the coordinator against in-process workers that behave like the worker page.
+// Answers every round with the same fake change, the right size for the linear task.
+const steady = (delta = [[-0.1], [-0.1]]) => (round, reply) =>
+  reply({ type: 'update', count: round.count * round.localSteps, delta: packValues(delta), loss: 1, computeMs: 1 });
+
+// Trains for real, like the worker page: own task copy, own optimizer for each run.
+const realWorker = (round, reply, worker) => void (async () => {
+  worker.task ??= createTask();
+  if (worker.runId !== round.runId) {
+    worker.optimizer?.dispose();
+    Object.assign(worker, { runId: round.runId, optimizer: createOptimizer(round.optimizer, round.learningRate) });
+  }
+  const weights = unpackValues(round.weights, worker.task.variables);
+  const result = await trainLocally(worker.task, worker.optimizer, weights, round);
+  reply({ type: 'update', count: round.count * round.localSteps, ...result, delta: packValues(result.delta) });
+})();
+
 async function simulate(workerCount, { rounds = 40, batchSize = 17, localSteps = 1, optimizer = 'sgd', learningRate = 0.1 } = {}) {
   const task = createTask();
-  const workers = Array.from({ length: workerCount }, () => ({ task: createTask() }));
-  const trainer = trainerWith(task, {
-    send(message) {
-      const worker = workers[Number(message.to)];
-      void (async () => {
-        if (worker.runId !== message.runId) {
-          worker.optimizer?.dispose();
-          Object.assign(worker, { runId: message.runId, optimizer: createOptimizer(message.optimizer, message.learningRate) });
-        }
-        const weights = unpackValues(message.weights, worker.task.variables);
-        const result = await trainLocally(worker.task, worker.optimizer, weights, message);
-        trainer.receive({
-          type: 'update', workerId: message.to, runId: message.runId, round: message.round,
-          count: message.count * message.localSteps, ...result, delta: packValues(result.delta),
-        });
-      })().catch(error => trainer.receive({ ...message, type: 'worker-error', workerId: message.to, error: error.message }));
-    },
-  });
+  const workers = [];
+  const behaviors = Object.fromEntries(Array.from({ length: workerCount }, (_, i) => [`w${i}`, (round, reply, worker) => {
+    if (!workers.includes(worker)) workers.push(worker);
+    realWorker(round, reply, worker);
+  }]));
   try {
-    const run = await trainer.train({
-      workerIds: workers.map((_, i) => String(i)), rounds, batchSize, localSteps, optimizer, learningRate,
-    });
+    const run = await swarm(task, behaviors).train({ rounds, batchSize, localSteps, optimizer, learningRate });
     return { run, weights: await readValues(task.variables) };
   } finally {
     task.dispose();
-    workers.forEach(worker => { worker.task.dispose(); worker.optimizer?.dispose(); });
+    workers.forEach(worker => { worker.task?.dispose(); worker.optimizer?.dispose(); });
   }
 }
 
@@ -98,19 +131,6 @@ test('timing summary skips warm-up and splits each round into compute, network, 
     point(2, 1000, 80, [50, 60]),
     point(3, 1120, 100, [70, 40]),
   ]), { rounds: 2, roundMs: 110, computeMs: 65, networkMs: 25, coordinatorMs: 20 });
-});
-
-test('updates are averaged by example count and must be finite and match the model', () => {
-  const task = createTask();
-  try {
-    assert.deepEqual(averageUpdates([
-      { count: 1, delta: [[1], [-1]] },
-      { count: 3, delta: [[5], [3]] },
-    ], task.variables), [[4], [2]]);
-    assert.throws(() => averageUpdates([{ count: 1, delta: [[NaN], [0]] }], task.variables), /finite/);
-    assert.throws(() => averageUpdates([{ count: 0, delta: [[1], [0]] }], task.variables), /count/);
-    assert.throws(() => assignValues(task.variables, [[1], [1, 2]]), /match/);
-  } finally { task.dispose(); }
 });
 
 test('packed weights round-trip exactly, are ~4x smaller than JSON, and reject the wrong size', async () => {
@@ -200,16 +220,9 @@ test('three workers learn with Adam and several local steps per round', async ()
 
 test('the outer Nesterov step follows the same formula as ml/sim.py (PyTorch)', async () => {
   const task = createTask();
-  // Every worker moves each weight by d = -0.1, so the outer gradient is g = 0.1 each round.
-  const trainer = trainerWith(task, {
-    send(message) {
-      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
-    },
-  });
   try {
-    const run = await trainer.train({ workerIds: ['a', 'b'], rounds: 2, batchSize: 8, localSteps: 1,
-      optimizer: 'sgd', learningRate: 0.1, outerLearningRate: 0.5, outerMomentum: 0.9 });
+    // Every worker moves each weight by d = -0.1, so the outer gradient is g = 0.1 each round.
+    const run = await swarm(task, { a: steady(), b: steady() }).train({ rounds: 2, outerLearningRate: 0.5, outerMomentum: 0.9 });
     assert.equal(run.outcome, 'completed', run.reason);
     // PyTorch Nesterov: buf = 0.9 * buf + g; w -= 0.5 * (g + 0.9 * buf).
     // Round 1: buf = 0.1, step 0.5 * 0.19 = 0.095. Round 2: buf = 0.19, step 0.5 * 0.271 = 0.1355.
@@ -217,33 +230,10 @@ test('the outer Nesterov step follows the same formula as ml/sim.py (PyTorch)', 
   } finally { task.dispose(); }
 });
 
-test('stale, duplicate, and unassigned updates cannot enter a round', async () => {
-  const task = createTask();
-  const trainer = trainerWith(task, {
-    send(message) {
-      const update = {
-        type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1,
-      };
-      trainer.receive({ ...update, runId: 'old-run' });
-      trainer.receive({ ...update, round: message.round - 1 });
-      trainer.receive({ ...update, workerId: 'unknown' });
-      trainer.receive(update);
-      trainer.receive({ ...update, delta: packValues([[999], [999]]) });
-    },
-  });
-  try {
-    const run = await trainer.train({ workerIds: ['a', 'b'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
-    assert.equal(run.outcome, 'completed');
-    sameWeights(await readValues(task.variables), [[-0.1], [-0.1]]);
-  } finally { task.dispose(); }
-});
-
 test('a round with no usable updates fails without changing the model', async () => {
   const task = createTask();
-  const trainer = trainerWith(task, { send() {} });
   try {
-    const run = await trainer.train({ workerIds: ['absent'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1, deadlineMs: 5 });
+    const run = await swarm(task, { silent: () => {} }).train({ deadlineMs: 5 });
     assert.equal(run.outcome, 'failed');
     assert.match(run.reason, /No worker sent a usable update.*deadline/);
     assert.equal(run.history.length, 1);
@@ -253,22 +243,18 @@ test('a round with no usable updates fails without changing the model', async ()
 
 test('workers that miss the deadline or fail are dropped, and the run continues with the rest', async () => {
   const task = createTask();
-  const trainer = trainerWith(task, {
-    send(message) {
-      const update = { type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 };
-      if (message.to === 'fast') trainer.receive(update);
-      if (message.to === 'broken') trainer.receive({ ...update, type: 'worker-error', error: 'GPU reset' });
-      // 'silent' never answers.
-    },
-  });
   try {
-    const run = await trainer.train({ workerIds: ['fast', 'silent', 'broken'], rounds: 3, batchSize: 8, localSteps: 1,
-      optimizer: 'sgd', learningRate: 0.1, deadlineMs: 5 });
+    const swarmed = swarm(task, {
+      fast: steady(),
+      silent: () => {},
+      broken: (round, reply) => reply({ type: 'worker-error', error: 'GPU reset' }),
+    });
+    const run = await swarmed.train({ rounds: 3, deadlineMs: 5 });
     assert.equal(run.outcome, 'completed', run.reason);
-    assert.deepEqual(run.history[1].dropped.map(item => item.workerId).sort(), ['broken', 'silent']);
-    assert.match(run.history[1].dropped.find(item => item.workerId === 'silent').reason, /deadline/);
-    assert.match(run.history[1].dropped.find(item => item.workerId === 'broken').reason, /GPU reset/);
+    const dropped = Object.fromEntries(run.history[1].dropped.map(({ workerId, reason }) => [swarmed.names(workerId), reason]));
+    assert.deepEqual(Object.keys(dropped).sort(), ['broken', 'silent']);
+    assert.match(dropped.silent, /deadline/);
+    assert.match(dropped.broken, /GPU reset/);
     assert.ok(run.history.slice(2).every(point => point.updates.length === 1 && point.dropped.length === 0));
     sameWeights(await readValues(task.variables), [[-0.3], [-0.3]]); // Three rounds of the fast worker's update.
   } finally { task.dispose(); }
@@ -276,24 +262,17 @@ test('workers that miss the deadline or fail are dropped, and the run continues 
 
 test('stop invalidates in-flight work and a new run can start cleanly', async () => {
   const task = createTask();
-  let old;
-  let shouldStop = true;
-  const trainer = trainerWith(task, {
-    send(message) {
-      const update = { type: 'update', workerId: 'a', runId: message.runId, round: message.round,
-        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 };
-      if (shouldStop) { old = update; trainer.stop(); }
-      else { trainer.receive(old); trainer.receive(update); }
-    },
-  });
+  let stopNext = true;
   try {
-    const settings = { workerIds: ['a'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 };
-    const stopped = await trainer.train(settings);
+    const swarmed = swarm(task, {
+      a: (round, reply) => (stopNext ? swarmed.trainer.stop() : steady()(round, reply)),
+    });
+    const stopped = await swarmed.train();
     assert.equal(stopped.outcome, 'stopped');
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
-    shouldStop = false;
-    const completed = await trainer.train(settings);
-    assert.equal(completed.outcome, 'completed');
+    stopNext = false;
+    const completed = await swarmed.train();
+    assert.equal(completed.outcome, 'completed', completed.reason);
     assert.notEqual(completed.id, stopped.id);
     closeTo((await readValues(task.variables))[0][0], -0.1);
   } finally { task.dispose(); }
@@ -301,62 +280,50 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
 
 test('a worker that leaves mid-round is not waited for, and later rounds go on without it', async () => {
   const task = createTask();
-  const trainer = trainerWith(task, {
-    send(message) {
-      if (message.to === 'leaving') return queueMicrotask(() => trainer.removeWorker('leaving', 'left'));
-      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
-    },
-  });
   try {
+    const swarmed = swarm(task, {
+      staying: steady(),
+      leaving: () => queueMicrotask(() => swarmed.connections.leaving.disconnect()),
+    });
     // A long deadline: the run only finishes quickly if it stops waiting for the leaver.
     const started = Date.now();
-    const run = await trainer.train({ workerIds: ['staying', 'leaving'], rounds: 3, batchSize: 8, localSteps: 1,
-      optimizer: 'sgd', learningRate: 0.1, deadlineMs: 60_000 });
+    const run = await swarmed.train({ rounds: 3, deadlineMs: 60_000 });
     assert.equal(run.outcome, 'completed', run.reason);
     assert.ok(Date.now() - started < 1000);
-    assert.deepEqual(run.history[1].dropped, [{ workerId: 'leaving', reason: 'left' }]);
-    assert.deepEqual(run.workerIds, ['staying']);
+    assert.deepEqual(run.history[1].dropped, [{ workerId: swarmed.ids.leaving, reason: 'left' }]);
+    assert.deepEqual(run.workerIds, [swarmed.ids.staying]);
     assert.ok(run.history.slice(2).every(point => point.updates.length === 1));
   } finally { task.dispose(); }
 });
 
 test('a worker that joins mid-run gets the current model from the next round', async () => {
   const task = createTask();
-  const firstWeights = {};
-  const trainer = trainerWith(task, {
-    send(message) {
-      firstWeights[message.to] ??= unpackValues(message.weights, task.variables);
-      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
-    },
-    onProgress(point) {
-      if (point.round === 1) trainer.addWorker('late');
-      if (point.round === 2) trainer.addWorker('early'); // Already in the run: ignored.
-    },
-  });
+  let lateWeights;
   try {
-    const run = await trainer.train({ workerIds: ['early'], rounds: 3, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
+    const swarmed = swarm(task, {
+      early: steady(),
+      late: (round, reply) => { lateWeights ??= unpackValues(round.weights, task.variables); steady()(round, reply); },
+    }, {
+      onProgress(point) {
+        if (point.round === 1) swarmed.trainer.addWorker(swarmed.ids.late);
+        if (point.round === 2) swarmed.trainer.addWorker(swarmed.ids.early); // Already in the run: ignored.
+      },
+    });
+    const run = await swarmed.trainer.train({ workerIds: [swarmed.ids.early], rounds: 3, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
     assert.equal(run.outcome, 'completed', run.reason);
     assert.deepEqual(run.history.slice(1).map(point => point.updates.length), [1, 2, 2]);
-    sameWeights(firstWeights.late, [[-0.1], [-0.1]]); // The model after round 1.
-    assert.deepEqual(run.participants, ['early', 'late']);
+    sameWeights(lateWeights, [[-0.1], [-0.1]]); // The model after round 1.
+    assert.deepEqual(run.participants, [swarmed.ids.early, swarmed.ids.late]);
   } finally { task.dispose(); }
 });
 
 test('with more workers than the per-round cap, workers take turns', async () => {
   const task = createTask();
-  const trainer = trainerWith(task, {
-    send(message) {
-      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
-    },
-  });
   try {
-    const run = await trainer.train({ workerIds: ['a', 'b', 'c', 'd', 'e'], rounds: 5, batchSize: 8, localSteps: 1,
-      optimizer: 'sgd', learningRate: 0.1, maxWorkersPerRound: 2 });
+    const swarmed = swarm(task, Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(name => [name, steady()])));
+    const run = await swarmed.train({ rounds: 5, maxWorkersPerRound: 2 });
     assert.equal(run.outcome, 'completed', run.reason);
-    const picks = run.history.slice(1).map(point => point.updates.map(update => update.workerId).sort().join(''));
+    const picks = run.history.slice(1).map(point => point.updates.map(update => swarmed.names(update.workerId)).sort().join(''));
     // Longest-waiting first, ties in join order: everyone trains within every 3 rounds.
     assert.deepEqual(picks, ['ab', 'cd', 'ae', 'bc', 'ad']);
     assert.ok(run.history.slice(1).every(point => point.dropped.length === 0), 'Resting workers are not dropped');
@@ -365,9 +332,9 @@ test('with more workers than the per-round cap, workers take turns', async () =>
 
 test('the run fails once every worker has left', async () => {
   const task = createTask();
-  const trainer = trainerWith(task, { send: message => queueMicrotask(() => trainer.removeWorker(message.to, 'left')) });
   try {
-    const run = await trainer.train({ workerIds: ['a'], rounds: 3, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
+    const swarmed = swarm(task, { a: () => queueMicrotask(() => swarmed.connections.a.disconnect()) });
+    const run = await swarmed.train({ rounds: 3 });
     assert.equal(run.outcome, 'failed');
     assert.match(run.reason, /left/);
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
@@ -376,15 +343,11 @@ test('the run fails once every worker has left', async () => {
 
 test('a worker with a wrong example count is dropped rather than skewing the average', async () => {
   const task = createTask();
-  const trainer = trainerWith(task, {
-    send(message) {
-      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: packValues([[1], [1]]), loss: 1, computeMs: 1 });
-    },
-  });
   try {
     // 3 local steps of 8 examples, but the worker claims only 8.
-    const run = await trainer.train({ workerIds: ['a'], rounds: 1, batchSize: 8, localSteps: 3, optimizer: 'sgd', learningRate: 0.1 });
+    const run = await swarm(task, {
+      a: (round, reply) => reply({ type: 'update', count: round.count, delta: packValues([[1], [1]]), loss: 1, computeMs: 1 }),
+    }).train({ localSteps: 3 });
     assert.equal(run.outcome, 'failed');
     assert.match(run.reason, /invalid update/);
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);

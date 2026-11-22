@@ -136,7 +136,7 @@ function showWorkers() {
   if (!infos.size) $('workers').textContent = 'No workers yet. Open a worker tab or the phone link.';
   // Workers that disconnect mid-run just leave it; new ones join from the next round.
   for (const id of [...trainer?.active?.workerIds ?? []]) {
-    if (!workers.some(worker => worker.id === id && worker.ready)) trainer.removeWorker(id, 'left');
+    if (!workers.some(worker => worker.id === id && worker.ready)) trainer.removeWorker(id);
   }
   for (const worker of workers.filter(canRun)) trainer?.addWorker(worker.id);
   refreshControls();
@@ -226,15 +226,16 @@ async function keepScreenOn() {
 // ---- Connection ----
 
 function receive(message) {
-  if (message.type === 'update') {
-    const info = workerInfo(message.workerId);
-    Object.assign(info, { activity: `round ${message.round} done`, computeMs: message.computeMs, memory: message.memory });
-    info.examples += message.count;
+  if (message.type === 'round-result') {
+    for (const { workerId, count, computeMs, memory } of message.updates) {
+      const info = workerInfo(workerId);
+      Object.assign(info, { activity: `round ${message.round} done`, computeMs, memory });
+      info.examples += count;
+    }
     trainer?.receive(message);
     showWorkers();
   } else if (message.type === 'worker-error') {
     workerInfo(message.workerId).error = message.error;
-    trainer?.receive(message);
     showWorkers();
   }
 }
