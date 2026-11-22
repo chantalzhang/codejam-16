@@ -28,7 +28,7 @@ try {
   assert.equal(await page.locator('#start').isDisabled(), true);
   assert.equal(await page.locator('#worker-count').textContent(), '0');
   assert.equal(await page.locator('label').filter({ has: page.locator('#batch-size') }).textContent(), 'Images per phone per step ');
-  assert.equal(await page.locator('#task').inputValue(), 'fashion-mnist-v1');
+  assert.equal(await page.locator('#task').inputValue(), 'guess-the-game-v1');
   await page.locator('#task').selectOption('linear-function-v1');
 
   async function addWorker(backend = 'webgl') {
@@ -153,6 +153,13 @@ try {
   assert.ok(fashion.history.slice(1).every(point => point.updates.every(update => update.count === 8 * 2)));
   assert.ok(fashion.history.every(point => point.accuracy >= 0 && point.accuracy <= 1));
   assert.match(await page.locator('#accuracy').textContent(), /^\d+\.\d%$/);
+
+  // Short Guess the game run: color images train, and the 4 display images get predictions.
+  await page.locator('#task').selectOption('guess-the-game-v1');
+  const games = await run(3, 8, 2);
+  assert.ok(games.history.every(point => point.accuracy >= 0 && point.accuracy <= 1 && point.display.length === 4));
+  assert.equal(await page.locator('#predictions .prediction-sample').count(), 4);
+  await page.locator('#task').selectOption('fashion-mnist-v1');
 
   // A low target stops the run early and shows the result banner.
   await page.locator('#target').fill('20');

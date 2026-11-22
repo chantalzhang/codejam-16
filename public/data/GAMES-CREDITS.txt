@@ -1,0 +1,5 @@
+Guess the game images (games-*.bin), downscaled to 32x32 and 64x64. All CC BY 4.0.
+- Gameplay Images, Adit Magotra (kaggle.com/datasets/aditmagotra/gameplay-images), via huggingface.co/datasets/Bingsu/Gameplay_Images
+- Gamed, ybashir (huggingface.co/datasets/ybashir/gamed-game-classification-dataset)
+- ViT Video Game Classification Dataset, Vasileios Katsaitis (zenodo.org/records/15574186)
+Game screenshots belong to their publishers.
