@@ -256,9 +256,12 @@ h1 { font-size: 22px; font-weight: 500; letter-spacing: -.4px; margin: 0; }
 }
 
 /* ---- Production additions ---- */
-/* Real class names are longer than the mockup's, e.g. "Ankle boot". */
+/* Real class names are longer than the mockup's, e.g. "Bombardino Crocodilo": let them wrap. */
 .prediction-current { flex-wrap: wrap; row-gap: 2px; }
-.prediction-name { font-size: clamp(20px, 1.6vw, 26px); white-space: nowrap; }
+.prediction-name { font-size: clamp(20px, 1.6vw, 26px); overflow-wrap: anywhere; }
+.prediction-comparison { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+.prediction-comparison dd { font-size: clamp(16px, 1.5vw, 22px); overflow-wrap: anywhere; line-height: 1.2; }
+.prediction-comparison .first-guess { font-size: 14px; }
 body:not(.phone-view) .layout { padding-bottom: 72px; }
 .run-result { margin: -12px 0 22px; color: var(--green); font-size: 18px; }
 .training-diagnostics:has(> #probability-panel[hidden]) { grid-template-columns: minmax(0, 1fr); }

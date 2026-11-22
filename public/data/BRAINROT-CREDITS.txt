@@ -1,0 +1,3 @@
+Italian brainrot images (brainrot-*.bin), downscaled to 32x32 and 64x64.
+- Italian Brainrot Images, Bubble PW (kaggle.com/datasets/bubblepw/italian-brainrot-images). License not stated.
+Characters and artwork belong to their creators.

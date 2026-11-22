@@ -102,9 +102,10 @@ export function drawProbabilityHistory(svg, evaluations, labels, classNames, hei
   const classes = classNames.length;
   const rowHeight = (bottom - top - gap * (labels.length - 1)) / (labels.length * classes);
   const columnWidth = (width - left - right) / columns.length;
-  // Too dense for every class name (e.g. 10 classes): label only the actual class, which
-  // also names the image, so the rotated image labels are dropped.
+  // The actual class's row is labelled in green, which also names the image. Too dense for
+  // every class name (e.g. 10 classes): label only that row. Long names are shortened.
   const dense = rowHeight < 9;
+  const short = text => text.length > 11 ? `${text.slice(0, 10).trimEnd()}…` : text;
   const groups = labels.map((actual, image) => {
     const groupY = top + image * (classes * rowHeight + gap);
     const rows = classNames.map((name, classIndex) => {
@@ -116,12 +117,10 @@ export function drawProbabilityHistory(svg, evaluations, labels, classNames, hei
         return `<rect x="${left + column * columnWidth + 0.5}" y="${y + 0.5}" width="${Math.max(columnWidth - 1, 0.5)}" height="${Math.max(rowHeight - 1, 0.5)}" fill="${heatColor(score)}" stroke="${winner ? classIndex === actual ? 'var(--green)' : 'var(--red)' : 'none'}" stroke-width="1" stroke-opacity=".5"><title>${escape(classNames[actual])} image · eval ${evaluation} · P(${escape(name)}) = ${(score * 100).toFixed(1)}%</title></rect>`;
       }).join('');
       const label = !dense || classIndex === actual
-        ? `<text x="${left - 8}" y="${y + rowHeight / 2 + 3}" text-anchor="end" fill="${classIndex === actual ? 'var(--green)' : '#9ba8b2'}">${escape(name)}</text>` : '';
+        ? `<text x="${left - 8}" y="${y + rowHeight / 2 + 3}" text-anchor="end" fill="${classIndex === actual ? 'var(--green)' : '#9ba8b2'}">${escape(short(name))}<title>${escape(name)}</title></text>` : '';
       return label + cells;
     }).join('');
-    const groupLabel = dense ? `<path d="M${left - 4},${groupY + 0.5}V${groupY + classes * rowHeight - 0.5}" stroke="#35414a"/>`
-      : `<text transform="translate(14 ${groupY + classes * rowHeight / 2}) rotate(-90)" font-size="11" text-anchor="middle" fill="#c0c9d0">${escape(classNames[actual])}</text>`;
-    return groupLabel + rows;
+    return `<path d="M${left - 4},${groupY + 0.5}V${groupY + classes * rowHeight - 0.5}" stroke="#35414a"/>${rows}`;
   }).join('');
   const ticks = columns.map((evaluation, column) => ({ evaluation, column }))
     .filter((_, i) => i % Math.max(1, Math.ceil(columns.length / 5)) === 0)
