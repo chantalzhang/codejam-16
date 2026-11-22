@@ -45,6 +45,7 @@ const TIMING_IDS = { stepMs: 'step-time', computeMs: 'compute-time', networkMs: 
 function showProgress(point, history) {
   $('step').textContent = `${point.step} / ${trainer.active.steps}`;
   $('loss').textContent = point.loss.toPrecision(4);
+  $('accuracy').textContent = point.accuracy === undefined ? '—' : `${(point.accuracy * 100).toFixed(1)}%`;
   $('elapsed').textContent = `${(point.elapsedMs / 1000).toFixed(1)} s`;
   const timing = timingSummary(history);
   for (const [key, id] of Object.entries(TIMING_IDS)) $(id).textContent = timing ? formatMs(timing[key]) : '—';
@@ -58,7 +59,7 @@ function resetModel() {
   task?.dispose();
   task = selected.createTask();
   trainer = new SharedTrainer(task, { send, onProgress: showProgress });
-  for (const id of ['step', 'loss', 'elapsed', ...Object.values(TIMING_IDS)]) $(id).textContent = '—';
+  for (const id of ['step', 'loss', 'accuracy', 'elapsed', ...Object.values(TIMING_IDS)]) $(id).textContent = '—';
 }
 
 // What the laptop knows about each worker, kept after it leaves so failures stay visible.
