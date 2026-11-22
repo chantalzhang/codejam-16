@@ -6,7 +6,7 @@ import { createTask } from '../src/linear-task.js';
 import * as imageTask from '../src/image-task.js';
 import { decode } from '../src/fashion-task.js';
 import { SharedTrainer, averageUpdates, timingSummary } from '../src/shared-trainer.js';
-import { assignValues, createOptimizer, readValues, trainLocally } from '../src/tensors.js';
+import { assignValues, createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
 
 await tf.setBackend('cpu');
 
@@ -29,10 +29,11 @@ async function simulate(workerCount, { rounds = 40, batchSize = 17, localSteps =
           worker.optimizer?.dispose();
           Object.assign(worker, { runId: message.runId, optimizer: createOptimizer(message.optimizer, message.learningRate) });
         }
-        const result = await trainLocally(worker.task, worker.optimizer, message.weights, message);
+        const weights = unpackValues(message.weights, worker.task.variables);
+        const result = await trainLocally(worker.task, worker.optimizer, weights, message);
         trainer.receive({
           type: 'update', workerId: message.to, runId: message.runId, round: message.round,
-          count: message.count * message.localSteps, ...result,
+          count: message.count * message.localSteps, ...result, delta: packValues(result.delta),
         });
       })().catch(error => trainer.receive({ ...message, type: 'worker-error', workerId: message.to, error: error.message }));
     },
@@ -101,6 +102,19 @@ test('updates are averaged by example count and must be finite and match the mod
     assert.throws(() => averageUpdates([{ count: 1, delta: [[NaN], [0]] }], task.variables), /finite/);
     assert.throws(() => averageUpdates([{ count: 0, delta: [[1], [0]] }], task.variables), /count/);
     assert.throws(() => assignValues(task.variables, [[1], [1, 2]]), /match/);
+  } finally { task.dispose(); }
+});
+
+test('packed weights round-trip exactly, are ~4x smaller than JSON, and reject the wrong size', async () => {
+  const task = imageTask.createTask();
+  try {
+    const weights = await readValues(task.variables);
+    const packed = packValues(weights);
+    assert.deepEqual(unpackValues(packed, task.variables), weights);
+    const ratio = JSON.stringify(weights).length / packed.length;
+    assert.ok(ratio > 3, `only ${ratio.toFixed(1)}x smaller`);
+    assert.throws(() => unpackValues(packed.slice(8), task.variables), /do not match/);
+    assert.throws(() => unpackValues([[1]], task.variables), /do not match/);
   } finally { task.dispose(); }
 });
 
@@ -182,7 +196,7 @@ test('the outer Nesterov step follows the same formula as ml/sim.py (PyTorch)', 
   const trainer = new SharedTrainer(task, {
     send(message) {
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 });
+        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
     },
   });
   try {
@@ -201,13 +215,13 @@ test('stale, duplicate, and unassigned updates cannot enter a round', async () =
     send(message) {
       const update = {
         type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1,
+        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1,
       };
       trainer.receive({ ...update, runId: 'old-run' });
       trainer.receive({ ...update, round: message.round - 1 });
       trainer.receive({ ...update, workerId: 'unknown' });
       trainer.receive(update);
-      trainer.receive({ ...update, delta: [[999], [999]] });
+      trainer.receive({ ...update, delta: packValues([[999], [999]]) });
     },
   });
   try {
@@ -234,7 +248,7 @@ test('workers that miss the deadline or fail are dropped, and the run continues 
   const trainer = new SharedTrainer(task, {
     send(message) {
       const update = { type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 };
+        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 };
       if (message.to === 'fast') trainer.receive(update);
       if (message.to === 'broken') trainer.receive({ ...update, type: 'worker-error', error: 'GPU reset' });
       // 'silent' never answers.
@@ -259,7 +273,7 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
   const trainer = new SharedTrainer(task, {
     send(message) {
       const update = { type: 'update', workerId: 'a', runId: message.runId, round: message.round,
-        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 };
+        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 };
       if (shouldStop) { old = update; trainer.stop(); }
       else { trainer.receive(old); trainer.receive(update); }
     },
@@ -283,7 +297,7 @@ test('a worker that leaves mid-round is not waited for, and later rounds go on w
     send(message) {
       if (message.to === 'leaving') return queueMicrotask(() => trainer.removeWorker('leaving', 'left'));
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 });
+        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
     },
   });
   try {
@@ -304,9 +318,9 @@ test('a worker that joins mid-run gets the current model from the next round', a
   const firstWeights = {};
   const trainer = new SharedTrainer(task, {
     send(message) {
-      firstWeights[message.to] ??= message.weights;
+      firstWeights[message.to] ??= unpackValues(message.weights, task.variables);
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 });
+        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
     },
     onProgress(point) {
       if (point.round === 1) trainer.addWorker('late');
@@ -338,7 +352,7 @@ test('a worker with a wrong example count is dropped rather than skewing the ave
   const trainer = new SharedTrainer(task, {
     send(message) {
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
-        count: message.count, delta: [[1], [1]], loss: 1, computeMs: 1 });
+        count: message.count, delta: packValues([[1], [1]]), loss: 1, computeMs: 1 });
     },
   });
   try {
