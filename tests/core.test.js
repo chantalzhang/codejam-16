@@ -278,18 +278,17 @@ test('a run stops once its time limit has passed', async () => {
   } finally { task.dispose(); }
 });
 
-test('a round with no usable updates fails without changing the model', async () => {
+test('a round with no usable updates leaves the model unchanged, and the run goes on', async () => {
   const task = createTask();
   try {
-    const run = await swarm(task, { silent: () => {} }).train({ deadlineMs: 5 });
-    assert.equal(run.outcome, 'failed');
-    assert.match(run.reason, /No worker sent a usable update.*deadline/);
-    assert.equal(run.history.length, 1);
+    const run = await swarm(task, { silent: () => {} }).train({ rounds: 2, deadlineMs: 5 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    assert.match(run.history[1].dropped[0].reason, /deadline/);
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
   } finally { task.dispose(); }
 });
 
-test('workers that miss the deadline or fail are dropped, and the run continues with the rest', async () => {
+test('workers that miss the deadline or fail sit out a round, then try again', async () => {
   const task = createTask();
   try {
     const swarmed = swarm(task, {
@@ -299,12 +298,27 @@ test('workers that miss the deadline or fail are dropped, and the run continues 
     });
     const run = await swarmed.train({ rounds: 3, deadlineMs: 5 });
     assert.equal(run.outcome, 'completed', run.reason);
-    const dropped = Object.fromEntries(run.history[1].dropped.map(({ workerId, reason }) => [swarmed.names(workerId), reason]));
-    assert.deepEqual(Object.keys(dropped).sort(), ['broken', 'silent']);
-    assert.match(dropped.silent, /deadline/);
-    assert.match(dropped.broken, /GPU reset/);
-    assert.ok(run.history.slice(2).every(point => point.updates.length === 1 && point.dropped.length === 0));
+    const dropped = point => point.dropped.map(({ workerId }) => swarmed.names(workerId)).sort();
+    assert.deepEqual(dropped(run.history[1]), ['broken', 'silent']);
+    assert.match(run.history[1].dropped.find(item => swarmed.names(item.workerId) === 'broken').reason, /GPU reset/);
+    // Round 2: they sit out, so the round doesn't wait. Round 3: they're tried again.
+    assert.equal(run.history[2].updates.length, 1);
+    assert.deepEqual(dropped(run.history[2]), []);
+    assert.deepEqual(dropped(run.history[3]), ['broken', 'silent']);
     sameWeights(await readValues(task.variables), [[-0.3], [-0.3]]); // Three rounds of the fast worker's update.
+  } finally { task.dispose(); }
+});
+
+test('a worker that misses one deadline is back in the run two rounds later', async () => {
+  const task = createTask();
+  try {
+    const swarmed = swarm(task, {
+      fast: steady(),
+      flaky: (round, reply) => { if (round.round !== 1) steady()(round, reply); },
+    });
+    const run = await swarmed.train({ rounds: 4, deadlineMs: 5 });
+    const contributors = point => point.updates.map(({ workerId }) => swarmed.names(workerId)).sort();
+    assert.deepEqual(run.history.slice(1).map(contributors), [['fast'], ['fast'], ['fast', 'flaky'], ['fast', 'flaky']]);
   } finally { task.dispose(); }
 });
 
@@ -396,8 +410,7 @@ test('a worker with a wrong example count is dropped rather than skewing the ave
     const run = await swarm(task, {
       a: (round, reply) => reply({ type: 'update', count: round.count, delta: packValues([[1], [1]]), loss: 1, computeMs: 1 }),
     }).train({ localSteps: 3 });
-    assert.equal(run.outcome, 'failed');
-    assert.match(run.reason, /invalid update/);
+    assert.match(run.history[1].dropped[0].reason, /invalid update/);
     assert.deepEqual(await readValues(task.variables), [[0], [0]]);
   } finally { task.dispose(); }
 });
