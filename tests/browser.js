@@ -220,10 +220,18 @@ try {
   const oldPhone = await browser.newPage({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15' });
   await oldPhone.addInitScript(() => Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined }));
   await oldPhone.goto(`${base}?role=worker`);
-  await oldPhone.waitForFunction(() => /sitting out/.test(document.querySelector('#worker-status').textContent));
+  await oldPhone.waitForFunction(() => /Safari/.test(document.querySelector('#sit-out-text').textContent));
+  assert.equal(await oldPhone.locator('#sit-out').isVisible(), true);
+  await page.waitForFunction(() => document.querySelector('#cant-join').textContent === "1 more can't join (browser)");
   await page.waitForFunction(() => [...document.querySelectorAll('#workers .card')]
     .some(card => /iPhone/.test(card.textContent) && /sitting out: no WebGPU/.test(card.textContent)));
   await oldPhone.close();
+  // Scanned inside Instagram: point to the real browser.
+  const inApp = await browser.newPage({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Instagram 350.0' });
+  await inApp.addInitScript(() => Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined }));
+  await inApp.goto(`${base}?role=worker`);
+  await inApp.waitForFunction(() => /Instagram browser/.test(document.querySelector('#sit-out-text').textContent));
+  await inApp.close();
   await readyWorkers(1);
 
   // A WebGPU worker (what iPhones use) trains alongside a WebGL one.
