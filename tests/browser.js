@@ -13,7 +13,8 @@ let browser;
 try {
   browser = await chromium.launch({
     headless: true,
-    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    // Software WebGL and WebGPU only: tests never touch the real GPU.
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader'],
   });
   const errors = [];
   const page = await browser.newPage({ viewport: { width: 1200, height: 1100 } });
@@ -28,10 +29,10 @@ try {
   assert.equal(await page.locator('#task').inputValue(), 'fashion-mnist-v1');
   await page.locator('#task').selectOption('linear-function-v1');
 
-  async function addWorker() {
+  async function addWorker(backend = 'webgl') {
     const worker = await browser.newPage();
     worker.on('pageerror', error => errors.push(error.message));
-    await worker.goto(base + '?role=worker');
+    await worker.goto(`${base}?role=worker&backend=${backend}`);
     await worker.waitForFunction(() => document.querySelector('#connection').textContent.startsWith('Connected'));
     assert.equal(await worker.locator('#role-title').textContent(), 'Shared training · worker');
     return worker;
@@ -151,6 +152,14 @@ try {
   assert.match(gpuReset.reason, /GPU reset|disconnected/);
   await page.waitForFunction(() => /GPU reset/.test(document.querySelector('#workers .card.left .state')?.textContent));
   await readyWorkers(1);
+
+  // A WebGPU worker (what iPhones use) trains alongside a WebGL one.
+  const gpuWorker = await addWorker('webgpu');
+  assert.match(await gpuWorker.locator('#connection').textContent(), /WebGPU$/);
+  await readyWorkers(2);
+  await page.locator('#task').selectOption('fashion-mnist-v1');
+  const mixed = await run(2, 8, 2);
+  assert.deepEqual(mixed.workers.map(worker => worker.backend).sort(), ['webgl', 'webgpu']);
   await page.screenshot({ path: join(process.env.RUNS_DIR, 'laptop.png'), fullPage: true });
 
   assert.deepEqual(errors, []);

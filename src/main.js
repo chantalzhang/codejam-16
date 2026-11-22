@@ -1,11 +1,16 @@
 import './style.css';
-import { initializeBackend, memoryUsage, onGpuReset } from './backend.js';
+import { BACKENDS, backendLabel, initializeBackend, memoryUsage, onGpuReset } from './backend.js';
 import { SharedTrainer, timingSummary } from './shared-trainer.js';
 import { createOptimizer, trainLocally } from './tensors.js';
 import { tasks } from './tasks.js';
 
 const $ = id => document.getElementById(id);
-const role = new URLSearchParams(location.search).get('role') === 'worker' ? 'worker' : 'coordinator';
+const params = new URLSearchParams(location.search);
+const role = params.get('role') === 'worker' ? 'worker' : 'coordinator';
+// Workers use WebGPU when the browser has it: WebGL froze iPhones mid-training.
+// Override for testing, e.g. ?role=worker&backend=webgl.
+const preferredBackend = BACKENDS.includes(params.get('backend')) ? params.get('backend')
+  : navigator.gpu ? 'webgpu' : 'webgl';
 $('role-title').textContent = role === 'coordinator' ? 'Shared training · laptop' : 'Shared training · worker';
 $(role).hidden = false;
 for (const { taskId, name } of tasks) $('task').add(new Option(name, taskId));
@@ -83,8 +88,7 @@ function card(id, info) {
   const element = document.createElement('article');
   element.className = `card ${tone}`;
   const title = document.createElement('h3');
-  const backendLabel = info.backend === 'cpu' ? 'CPU fallback' : 'WebGL';
-  title.textContent = `Worker ${info.number} · ${info.device ?? '…'} · ${backendLabel}`;
+  title.textContent = `Worker ${info.number} · ${info.device ?? '…'} · ${backendLabel(info.backend)}`;
   const state = document.createElement('p');
   state.className = 'state';
   state.textContent = label;
@@ -200,8 +204,7 @@ function receive(message) {
 }
 
 async function initialize() {
-  backend = await initializeBackend('webgl');
-  const backendLabel = backend === 'webgl' ? 'WebGL' : 'CPU fallback (not GPU)';
+  backend = await initializeBackend(role === 'worker' ? preferredBackend : 'webgl');
   onGpuReset(handleGpuReset);
   if (role === 'coordinator') {
     showTask();
@@ -214,7 +217,7 @@ async function initialize() {
     const message = JSON.parse(event.data);
     if (message.type === 'welcome') {
       connected = true;
-      $('connection').textContent = `Connected · ${deviceName()} · ${backendLabel}`;
+      $('connection').textContent = `Connected · ${deviceName()} · ${backendLabel(backend)}`;
       if (role === 'worker') {
         send({ type: 'ready', backend, device: deviceName(), tasks: tasks.map(({ taskId }) => taskId) });
       }
