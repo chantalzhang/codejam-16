@@ -1,18 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import { packValues, readValues, unpackValues, validateValues } from './tensors.js';
 
-// Average of the workers' weight changes, weighted by how many examples each trained on.
-export function averageUpdates(updates, variables) {
-  if (!updates.length) throw new Error('No updates received.');
-  for (const update of updates) {
-    if (!Number.isInteger(update.count) || update.count <= 0) throw new Error('Invalid example count.');
-    validateValues(update.delta, variables);
-  }
-  const total = updates.reduce((sum, update) => sum + update.count, 0);
-  return variables.map((variable, tensor) => Array.from({ length: variable.size }, (_, element) =>
-    updates.reduce((sum, update) => sum + update.delta[tensor][element] * update.count, 0) / total));
-}
-
 // Average time per round, skipping round 1 (GPU warm-up). Network time is approximate:
 // the wait for all updates minus the slowest worker's compute time.
 export function timingSummary(history) {
@@ -42,37 +30,23 @@ export class SharedTrainer {
     this.pending = null;
   }
 
+  // The relay sends one result per round: the average change and who was dropped.
   receive(message) {
     const pending = this.pending;
-    const run = this.active;
-    if (!pending || run?.cancelReason || message.runId !== run?.id || message.round !== pending.round ||
-        pending.results.has(message.workerId) || pending.dropped.has(message.workerId)) return;
-    const assignment = pending.assignments.find(item => item.workerId === message.workerId);
-    if (!assignment) return;
-    if (message.type === 'worker-error') {
-      this.drop(message.workerId, `failed: ${message.error}`);
+    if (message.type !== 'round-result' || !pending || this.active?.cancelReason ||
+        message.runId !== this.active?.id || message.round !== pending.round) return;
+    if (!message.delta) {
+      const reasons = message.dropped.map(({ reason }) => reason).join('; ');
+      pending.reject(new Error(`No worker sent a usable update (${reasons}).`));
       return;
     }
-    let delta;
     try {
-      if (message.count !== assignment.count * run.localSteps || !Number.isFinite(message.loss) ||
-          !Number.isFinite(message.computeMs) || message.computeMs < 0) throw new Error();
-      delta = unpackValues(message.delta, this.task.variables);
-      validateValues(delta, this.task.variables);
-    } catch {
-      this.drop(message.workerId, 'sent an invalid update');
-      return;
+      const average = unpackValues(message.delta, this.task.variables);
+      validateValues(average, this.task.variables);
+      pending.resolve({ average, updates: message.updates, dropped: message.dropped });
+    } catch (error) {
+      pending.reject(error);
     }
-    pending.results.set(message.workerId, { ...message, delta });
-    pending.settle();
-  }
-
-  // Removes a worker from the current round; the round goes on without it.
-  drop(workerId, reason) {
-    const pending = this.pending;
-    if (!pending?.assignments.some(item => item.workerId === workerId) || pending.results.has(workerId)) return;
-    pending.dropped.set(workerId, reason);
-    pending.settle();
   }
 
   // A worker connected mid-run: it gets the current model and trains from the next round.
@@ -84,12 +58,10 @@ export class SharedTrainer {
     run.workerIds.push(workerId);
   }
 
-  // A worker left: stop waiting for it this round and leave it out of later rounds.
-  removeWorker(workerId, reason) {
+  // A worker left: leave it out of later rounds. The relay stops waiting for it this round.
+  removeWorker(workerId) {
     const run = this.active;
-    if (!run?.workerIds.includes(workerId)) return;
-    run.workerIds = run.workerIds.filter(id => id !== workerId);
-    this.drop(workerId, reason);
+    if (run) run.workerIds = run.workerIds.filter(id => id !== workerId);
   }
 
   stop(reason = 'Stopped by coordinator') {
@@ -98,36 +70,19 @@ export class SharedTrainer {
     this.pending?.reject(new Error(reason));
   }
 
-  // Resolves once every worker has answered or dropped out, or at the deadline, with
-  // whatever updates arrived. Fails only if no worker sent a usable update.
+  // The relay fans the round out, waits for every worker or the deadline, and replies once.
   async requestUpdates(run, round, assignments, weights, deadlineMs) {
-    const pending = { round, assignments, results: new Map(), dropped: new Map() };
-    const packedWeights = packValues(weights);
+    const pending = { round };
     let timer;
     try {
       return await new Promise((resolve, reject) => {
-        const finish = () => {
-          if (pending.results.size) resolve({ updates: [...pending.results.values()], dropped: pending.dropped });
-          else reject(new Error(`No worker sent a usable update (${[...pending.dropped.values()].join('; ')}).`));
-        };
-        Object.assign(pending, {
-          reject,
-          settle: () => { if (pending.results.size + pending.dropped.size === assignments.length) finish(); },
-        });
+        Object.assign(pending, { resolve, reject });
         this.pending = pending;
-        timer = setTimeout(() => {
-          for (const { workerId } of assignments) {
-            if (!pending.results.has(workerId) && !pending.dropped.has(workerId)) {
-              pending.dropped.set(workerId, `missed the round ${round} deadline`);
-            }
-          }
-          finish();
-        }, deadlineMs);
-        // One message for everyone: the relay copies it to each assigned worker.
+        timer = setTimeout(() => reject(new Error(`The relay never finished round ${round}.`)), deadlineMs + 15_000);
         this.send({
-          type: 'round', taskId: this.task.id, runId: run.id, round,
+          type: 'round', taskId: this.task.id, runId: run.id, round, deadlineMs,
           firstStep: (round - 1) * run.localSteps + 1, localSteps: run.localSteps,
-          optimizer: run.optimizer, learningRate: run.learningRate, weights: packedWeights, assignments,
+          optimizer: run.optimizer, learningRate: run.learningRate, weights: packValues(weights), assignments,
         });
       });
     } finally {
@@ -185,12 +140,11 @@ export class SharedTrainer {
         const assignments = picked.map((workerId, i) => ({ workerId, offset: i * batchSize, count: batchSize }));
         const waitStarted = performance.now();
         // Round 1 also downloads data and warms up each worker's GPU.
-        const { updates, dropped } = await this.requestUpdates(
+        const { average, updates, dropped } = await this.requestUpdates(
           run, round, assignments, weights, round === 1 ? 4 * deadlineMs : deadlineMs);
         const waitMs = performance.now() - waitStarted;
         checkCancelled();
-        run.workerIds = run.workerIds.filter(id => !dropped.has(id));
-        const average = averageUpdates(updates, this.task.variables);
+        run.workerIds = run.workerIds.filter(id => !dropped.some(item => item.workerId === id));
         // Nesterov, same formula as torch.optim.SGD: buf = m * buf + g; w -= lr * (g + m * buf).
         tf.tidy(() => this.task.variables.forEach((variable, i) => {
           const gradient = tf.tensor(average[i], variable.shape, 'float32').neg();
@@ -199,7 +153,7 @@ export class SharedTrainer {
         }));
         await record(round, updates.map(({ workerId, count, loss, computeMs }) => ({
           workerId, count, loss, computeMs,
-        })), waitMs, [...dropped].map(([workerId, reason]) => ({ workerId, reason })));
+        })), waitMs, dropped);
       }
       run.outcome = 'completed';
     } catch (error) {
