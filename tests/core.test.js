@@ -5,6 +5,8 @@ import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
 import * as imageTask from '../src/image-task.js';
 import { classes, decode, sliceFor } from '../src/fashion-task.js';
+import { decode as decodeColor } from '../src/color-image-task.js';
+import games from '../src/games-task.js';
 import { SharedTrainer, timingSummary } from '../src/shared-trainer.js';
 import { createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
 import { createRelay } from '../server/relay-core.js';
@@ -126,6 +128,19 @@ test('Fashion-MNIST files decode into images with valid labels', async () => {
   // Four held-out images to show on screen: ankle boot, trouser, bag, shirt.
   const display = decode(new Uint8Array(await readFile('public/data/fashion-display.bin')));
   assert.deepEqual(Array.from(display.labels, label => classes[label]), ['Ankle boot', 'Trouser', 'Bag', 'Shirt']);
+});
+
+test('Guess the game files decode, and every training slice has the same number of each game', async () => {
+  for (let slice = 0; slice < 10; slice++) {
+    const data = decodeColor(new Uint8Array(await readFile(`public/data/games-train-${slice}.bin`)));
+    const counts = games.classes.map((_, c) => data.labels.filter(label => label === c).length);
+    assert.deepEqual(counts, games.classes.map(() => 111));
+  }
+  const test = decodeColor(new Uint8Array(await readFile('public/data/games-test.bin')));
+  assert.ok(test.count > 800 && test.labels.every(label => label < games.classes.length));
+  const display = decodeColor(new Uint8Array(await readFile('public/data/games-display.bin')), 64);
+  assert.deepEqual(Array.from(display.labels, label => games.classes[label]), ['Minecraft', 'Fortnite', 'Among Us', 'CS2']);
+  assert.deepEqual([0, 9, 10].map(games.sliceFor), [0, 9, 0]);
 });
 
 test('timing summary skips warm-up and splits each round into compute, network, and coordinator time', () => {
