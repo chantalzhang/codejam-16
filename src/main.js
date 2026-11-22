@@ -201,14 +201,14 @@ async function resetScreen() {
 
 // Phones show the room's state and the shared model's guesses. Sent at most twice a second,
 // since a wave of joins would otherwise send one per join to every phone.
-let statusTimer, runResult;
+let statusTimer, phoneResult;
 function scheduleStatus() {
   statusTimer ??= setTimeout(() => {
     statusTimer = undefined;
     if (socket?.readyState !== WebSocket.OPEN) return;
     const history = screen.display?.history;
     send({
-      type: 'status', state: roomState, phones: readyPhones(), taskId: selected.taskId, result: runResult,
+      type: 'status', state: roomState, phones: readyPhones(), taskId: selected.taskId, result: phoneResult,
       runId: screen.runId, speed: screen.speed, total: screen.total,
       display: history?.at(-1).map((probabilities, image) => ({
         probabilities: probabilities.map(value => Math.round(value * 1000) / 1000),
@@ -600,7 +600,7 @@ $('start').addEventListener('click', async () => {
   }
   const participants = workers.filter(canRun);
   roomState = 'training';
-  runResult = undefined;
+  phoneResult = undefined;
   await resetModel();
   $('saved').textContent = '';
   $('result').hidden = $('run-result').hidden = true;
@@ -619,10 +619,11 @@ $('start').addEventListener('click', async () => {
     if (ending) {
       const { accuracy, elapsedMs, workers: count } = ending;
       const [accuracyText, seconds, phones] = [(accuracy * 100).toFixed(1), (elapsedMs / 1000).toFixed(1), `${count} phone${count === 1 ? '' : 's'}`];
-      runResult = run.reachedTarget
+      $('result').textContent = $('run-result').textContent = run.reachedTarget
         ? `Reached ${accuracyText}% held-out accuracy in ${seconds} s with ${phones}`
         : `Time's up: ${accuracyText}% held-out accuracy after ${seconds} s with ${phones}`;
-      $('result').textContent = $('run-result').textContent = runResult;
+      // Phones get a short version.
+      phoneResult = run.reachedTarget ? `${accuracyText}% accuracy in ${seconds} s` : `Time's up: ${accuracyText}% accuracy`;
       $('result').hidden = $('run-result').hidden = false;
     }
     roomState = 'done';
