@@ -336,6 +336,25 @@ test('a worker that joins mid-run gets the current model from the next round', a
   } finally { task.dispose(); }
 });
 
+test('with more workers than the per-round cap, workers take turns', async () => {
+  const task = createTask();
+  const trainer = new SharedTrainer(task, {
+    send(message) {
+      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
+        count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
+    },
+  });
+  try {
+    const run = await trainer.train({ workerIds: ['a', 'b', 'c', 'd', 'e'], rounds: 5, batchSize: 8, localSteps: 1,
+      optimizer: 'sgd', learningRate: 0.1, maxWorkersPerRound: 2 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    const picks = run.history.slice(1).map(point => point.updates.map(update => update.workerId).sort().join(''));
+    // Longest-waiting first, ties in join order: everyone trains within every 3 rounds.
+    assert.deepEqual(picks, ['ab', 'cd', 'ae', 'bc', 'ad']);
+    assert.ok(run.history.slice(1).every(point => point.dropped.length === 0), 'Resting workers are not dropped');
+  } finally { task.dispose(); }
+});
+
 test('the run fails once every worker has left', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, { send: message => queueMicrotask(() => trainer.removeWorker(message.to, 'left')) });
