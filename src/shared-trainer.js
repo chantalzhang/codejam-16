@@ -139,14 +139,15 @@ export class SharedTrainer {
 
   async train({
     workerIds, rounds, batchSize, localSteps, optimizer, learningRate,
-    outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000,
+    outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000, maxWorkersPerRound = 100,
   }) {
     if (this.active) throw new Error('A run is already active.');
     if (!workerIds.length || new Set(workerIds).size !== workerIds.length ||
         ![rounds, batchSize, localSteps].every(value => Number.isInteger(value) && value > 0) ||
         ![learningRate, outerLearningRate].every(value => Number.isFinite(value) && value > 0) ||
         !(outerMomentum >= 0 && outerMomentum < 1) ||
-        !Number.isFinite(deadlineMs) || deadlineMs <= 0) throw new Error('Invalid training settings.');
+        !Number.isFinite(deadlineMs) || deadlineMs <= 0 ||
+        !(Number.isInteger(maxWorkersPerRound) && maxWorkersPerRound > 0)) throw new Error('Invalid training settings.');
     const run = {
       id: crypto.randomUUID(), taskId: this.task.id, workerIds: [...workerIds], participants: [...workerIds],
       rounds, batchSize, localSteps,
@@ -154,6 +155,7 @@ export class SharedTrainer {
       startedAt: new Date().toISOString(), history: [], outcome: 'running',
     };
     this.active = run;
+    const lastPicked = new Map(); // workerId → last round it trained in
     const buffers = this.task.variables.map(variable => tf.tidy(() => tf.variable(tf.zerosLike(variable), false)));
     const started = performance.now();
     const checkCancelled = () => { if (run.cancelReason) throw new Error(run.cancelReason); };
@@ -173,8 +175,15 @@ export class SharedTrainer {
         const weights = await readValues(this.task.variables);
         checkCancelled();
         if (!run.workerIds.length) throw new Error('Every worker left.');
+        // With a crowd, each round uses the workers that have waited longest, so everyone
+        // takes turns. 100 per round kept rounds under 1.7x slower in scripts/load-test.js;
+        // 200 was 3.2x. Sort is stable: ties keep join order.
+        const picked = [...run.workerIds]
+          .sort((a, b) => (lastPicked.get(a) ?? 0) - (lastPicked.get(b) ?? 0))
+          .slice(0, maxWorkersPerRound);
+        for (const id of picked) lastPicked.set(id, round);
         // Worker i gets examples [i × batchSize, (i + 1) × batchSize) of each global step.
-        const assignments = run.workerIds.map((workerId, i) => ({ workerId, offset: i * batchSize, count: batchSize }));
+        const assignments = picked.map((workerId, i) => ({ workerId, offset: i * batchSize, count: batchSize }));
         const waitStarted = performance.now();
         // Round 1 also downloads data and warms up each worker's GPU.
         const { updates, dropped } = await this.requestUpdates(
