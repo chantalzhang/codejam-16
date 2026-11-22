@@ -233,6 +233,19 @@ test('the outer Nesterov step follows the same formula as ml/sim.py (PyTorch)', 
   } finally { task.dispose(); }
 });
 
+test('a run stops as soon as it reaches the target accuracy, and says when', async () => {
+  const task = createTask();
+  task.evaluate = async () => ({ loss: 1, accuracy: [0.1, 0.4, 0.7, 0.9][(evaluations++)] ?? 0.9 }); // Fake climb.
+  let evaluations = 0;
+  try {
+    const run = await swarm(task, { a: steady(), b: steady() }).train({ rounds: 10, targetAccuracy: 0.7 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    assert.equal(run.history.length, 3); // Rounds 0, 1, 2: stopped at 70%, not after 10 rounds.
+    assert.deepEqual([run.reachedTarget.round, run.reachedTarget.accuracy, run.reachedTarget.workers], [2, 0.7, 2]);
+    assert.ok(run.reachedTarget.elapsedMs >= 0);
+  } finally { task.dispose(); }
+});
+
 test('a round with no usable updates fails without changing the model', async () => {
   const task = createTask();
   try {

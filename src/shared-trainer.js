@@ -94,6 +94,7 @@ export class SharedTrainer {
   async train({
     workerIds, rounds, batchSize, localSteps, optimizer, learningRate,
     outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000, maxWorkersPerRound = 500,
+    targetAccuracy = null, // Stop as soon as test accuracy reaches this (0–1).
   }) {
     if (this.active) throw new Error('A run is already active.');
     if (!workerIds.length || new Set(workerIds).size !== workerIds.length ||
@@ -101,11 +102,12 @@ export class SharedTrainer {
         ![learningRate, outerLearningRate].every(value => Number.isFinite(value) && value > 0) ||
         !(outerMomentum >= 0 && outerMomentum < 1) ||
         !Number.isFinite(deadlineMs) || deadlineMs <= 0 ||
-        !(Number.isInteger(maxWorkersPerRound) && maxWorkersPerRound > 0)) throw new Error('Invalid training settings.');
+        !(Number.isInteger(maxWorkersPerRound) && maxWorkersPerRound > 0) ||
+        !(targetAccuracy === null || (targetAccuracy > 0 && targetAccuracy <= 1))) throw new Error('Invalid training settings.');
     const run = {
       id: crypto.randomUUID(), taskId: this.task.id, workerIds: [...workerIds], participants: [...workerIds],
       rounds, batchSize, localSteps,
-      optimizer, learningRate, outerLearningRate, outerMomentum,
+      optimizer, learningRate, outerLearningRate, outerMomentum, targetAccuracy,
       startedAt: new Date().toISOString(), history: [], outcome: 'running',
     };
     this.active = run;
@@ -122,6 +124,7 @@ export class SharedTrainer {
       const point = { round, loss, accuracy, elapsedMs: performance.now() - started, waitMs, updates, dropped };
       run.history.push(point);
       this.onProgress(point, run.history);
+      return point;
     };
     try {
       await record(0);
@@ -151,9 +154,14 @@ export class SharedTrainer {
           buffers[i].assign(buffers[i].mul(outerMomentum).add(gradient));
           variable.assign(variable.sub(gradient.add(buffers[i].mul(outerMomentum)).mul(outerLearningRate)));
         }));
-        await record(round, updates.map(({ workerId, count, loss, computeMs }) => ({
+        const point = await record(round, updates.map(({ workerId, count, loss, computeMs }) => ({
           workerId, count, loss, computeMs,
         })), waitMs, dropped);
+        if (targetAccuracy !== null && point.accuracy >= targetAccuracy) {
+          // Counted from Start, which is what the audience sees.
+          run.reachedTarget = { round, elapsedMs: point.elapsedMs, accuracy: point.accuracy, workers: run.participants.length };
+          break;
+        }
       }
       run.outcome = 'completed';
     } catch (error) {
