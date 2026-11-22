@@ -13,6 +13,7 @@ export const taskId = 'fashion-mnist-v1';
 const SIZE = 28;
 const PIXELS = SIZE * SIZE;
 const CLASSES = 10;
+const SLICES = 5; // Training data comes in 5 files of 2,000 images (see ml/export_fashion.py).
 
 // File layout: count × 784 uint8 pixels, then count uint8 labels.
 export function decode(bytes) {
@@ -54,13 +55,16 @@ export function createTask() {
       tf.layers.dense({ units: CLASSES, kernelInitializer: tf.initializers.glorotUniform({ seed: 4 }) }),
     ],
   });
-  // Workers download training images on their first step; the laptop only needs test images.
+  // Each worker downloads one random slice of the training images on its first step, so a
+  // crowd covers all of them without everyone downloading everything. The laptop only
+  // needs the test images.
+  const slice = Math.floor(Math.random() * SLICES);
   let train, test;
   return {
     id: taskId,
     variables: model.trainableWeights.map(weight => weight.val),
     async makeBatch({ step, offset, count }) {
-      const data = await (train ??= download('fashion-train.bin'));
+      const data = await (train ??= download(`fashion-train-${slice}.bin`));
       // Global example numbers keep the full batch identical however it's split across workers.
       const indices = Array.from({ length: count }, (_, i) =>
         (Math.imul(step * 100_000 + offset + i, 0x9e3779b1) >>> 0) % data.count);

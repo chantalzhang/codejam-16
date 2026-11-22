@@ -113,7 +113,8 @@ test('image task gives identical batches however they are split, and trains to f
 });
 
 test('Fashion-MNIST files decode into images with valid labels', async () => {
-  for (const [file, count] of [['fashion-train.bin', 10_000], ['fashion-test.bin', 1_000]]) {
+  const slices = [0, 1, 2, 3, 4].map(i => [`fashion-train-${i}.bin`, 2_000]);
+  for (const [file, count] of [...slices, ['fashion-test.bin', 1_000]]) {
     const data = decode(new Uint8Array(await readFile(`public/data/${file}`)));
     assert.equal(data.count, count);
     assert.equal(data.pixels.length, count * 784);
