@@ -11,6 +11,11 @@ const role = params.get('role') === 'worker' ? 'worker' : 'coordinator';
 // Override for testing, e.g. ?role=worker&backend=webgl.
 const preferredBackend = BACKENDS.includes(params.get('backend')) ? params.get('backend')
   : navigator.gpu ? 'webgpu' : 'webgl';
+// Connect to this page's own server, or a hosted relay: ?relay=wss://….workers.dev/swarm
+// (lets the laptop page run locally, so runs still save, while phones use the hosted pages).
+const relayUrl = params.get('relay') ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/swarm`;
+const relayPage = new URL(relayUrl.replace(/^ws/, 'http'));
+$('worker-link').href = `${relayPage.origin}/?role=worker`;
 $('role-title').textContent = role === 'coordinator' ? 'Shared training · laptop' : 'Shared training · worker';
 $(role).hidden = false;
 for (const { taskId, name } of tasks) $('task').add(new Option(name, taskId));
@@ -246,7 +251,7 @@ async function initialize() {
     showTask();
     resetModel();
   }
-  socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/swarm`);
+  socket = new WebSocket(relayUrl);
   socket.addEventListener('open', () => send({ type: 'join', role }));
   let queue = Promise.resolve();
   socket.addEventListener('message', event => {
