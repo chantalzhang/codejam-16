@@ -70,19 +70,31 @@ export function updateCard(card, probabilities, guesses, classNames, { done = fa
     const ranked = probabilities.map((value, index) => ({ value, index })).sort((a, b) => b.value - a.value);
     const top = ranked.slice(0, 4);
     if (!top.some(item => item.index === label)) top[3] = ranked.find(item => item.index === label);
-    scores.replaceChildren(...top.sort((a, b) => b.value - a.value).map(({ value, index }) => {
-      const row = element('div', `class-score${index === label ? ' actual-class' : ''}${index === guess ? ' top-class' : ''}`);
-      const bar = element('span', 'score-track');
-      const fill = element('i');
-      fill.style.width = `${value * 100}%`;
-      bar.append(fill);
-      const amount = element('dd');
-      amount.append(bar, element('span', 'score-value', `${Math.round(value * 100)}%`));
-      row.append(element('dt', '', classNames[index]), amount);
-      return row;
-    }));
+    top.sort((a, b) => b.value - a.value);
+    // Same classes in the same order: update the rows in place so the bars slide.
+    const rows = [...scores.children];
+    if (rows.map(row => Number(row.dataset.class)).join() !== top.map(item => item.index).join()) {
+      scores.replaceChildren(...top.map(({ index }) => scoreRow(index, classNames[index])));
+    }
+    top.forEach(({ value, index }, i) => {
+      const row = scores.children[i];
+      row.className = `class-score${index === label ? ' actual-class' : ''}${index === guess ? ' top-class' : ''}`;
+      row.querySelector('i').style.width = `${value * 100}%`;
+      row.querySelector('.score-value').textContent = `${Math.round(value * 100)}%`;
+    });
   }
   return correct;
+}
+
+function scoreRow(index, name) {
+  const row = element('div', 'class-score');
+  row.dataset.class = index;
+  const bar = element('span', 'score-track');
+  bar.append(element('i'));
+  const amount = element('dd');
+  amount.append(bar, element('span', 'score-value'));
+  row.append(element('dt', '', name), amount);
+  return row;
 }
 
 // "1/4 → 3/4 correct on these test images", for the end of a run.
