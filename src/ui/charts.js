@@ -25,10 +25,11 @@ function lossAxis(losses) {
 }
 
 // points: [{ seconds, loss, accuracy (held-out, 0–1), shown (correct count or undefined) }].
-// Returns the chart's height, so the probability history can match it.
-export function drawLossChart(svg, points, shownTotal) {
+// Returns the chart's height, so the probability history can match it. maxHeight keeps it
+// on screen.
+export function drawLossChart(svg, points, shownTotal, maxHeight = Infinity) {
   const width = svg.clientWidth || 1000;
-  const height = Math.max(260, Math.min(340, Math.round(width * 0.48)));
+  const height = Math.round(Math.max(200, Math.min(340, width * 0.48, maxHeight)));
   const left = 58, right = 62, top = 36, bottom = height - 44;
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   if (!points.length) { svg.innerHTML = ''; return height; }

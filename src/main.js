@@ -151,19 +151,26 @@ function showScreen({ done = false } = {}) {
   $('room-step').textContent = latest ? latest.round : '—';
   $('comparison-time').textContent = latest ? `round ${latest.round} · t=${latest.seconds.toFixed(1)}s` : '';
   const display = screen.display;
-  const lossHeight = drawLossChart($('loss-chart'), screen.points, display?.examples.length);
   $('coordinator').classList.toggle('run-complete', done);
-  if (!display?.history.length) return;
-  const { examples, history, classes } = display;
-  const total = examples.length;
-  const correct = correctCount(history.at(-1));
-  [...$('predictions').children].forEach((card, image) =>
-    updateCard(card, history.at(-1)[image], guessChanges(history, image), classes, { done }));
-  $('predictions-panel').classList.toggle('has-errors', correct < total);
-  $('correct-count').textContent = `${correct} / ${total} correct`;
-  if (done) $('prediction-title').replaceChildren(resultSummary(correctCount(history[0]), correct, total));
-  $('evaluation-count').textContent = `${history.length} evals`;
-  drawProbabilityHistory($('probability-chart'), history, examples.map(example => example.label), classes, lossHeight);
+  if (display?.history.length) {
+    const { examples, history, classes } = display;
+    const total = examples.length;
+    const correct = correctCount(history.at(-1));
+    [...$('predictions').children].forEach((card, image) =>
+      updateCard(card, history.at(-1)[image], guessChanges(history, image), classes, { done }));
+    $('predictions-panel').classList.toggle('has-errors', correct < total);
+    $('correct-count').textContent = `${correct} / ${total} correct`;
+    if (done) $('prediction-title').replaceChildren(resultSummary(correctCount(history[0]), correct, total));
+    $('evaluation-count').textContent = `${history.length} evals`;
+  }
+  // Fit the charts above the control bar (after the cards above them are filled in).
+  // Positions are in screen pixels, sizes in zoomed ones.
+  const zoom = Number(getComputedStyle(document.body).zoom) || 1;
+  const space = (innerHeight - $('loss-chart').getBoundingClientRect().top - scrollY) / zoom - 72;
+  const lossHeight = drawLossChart($('loss-chart'), screen.points, display?.examples.length, space);
+  if (display?.history.length) {
+    drawProbabilityHistory($('probability-chart'), display.history, display.examples.map(example => example.label), display.classes, lossHeight);
+  }
 }
 
 // Shows the task's fixed held-out images with the (untrained) model's guesses, or hides the
@@ -646,7 +653,10 @@ $('disconnect').addEventListener('click', () => {
   $('worker-status').textContent = 'Disconnected. Reload this page to rejoin.';
   socket?.close();
 });
-addEventListener('resize', () => { if (role === 'coordinator') showScreen({ done: roomState === 'done' }); });
+// Redraw when the layout changes: window resized, or web fonts finished loading.
+const redraw = () => { if (role === 'coordinator') showScreen({ done: roomState === 'done' }); };
+addEventListener('resize', redraw);
+void document.fonts.ready.then(redraw);
 void initialize().catch(error => {
   $(connectionId).textContent = `Initialization failed: ${error.message}`;
 });

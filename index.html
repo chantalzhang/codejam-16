@@ -4,14 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#111315" />
-    <title>GPUmaxxing</title>
+    <title>GPUmaxxer</title>
   </head>
   <body>
     <main class="layout">
       <!-- Big screen (?role=laptop): coordinates the run. -->
       <section id="coordinator" class="projector-preview" aria-label="Training monitor" hidden>
         <header class="run-header">
-          <div class="run-heading"><h1>GPUmaxxing</h1><p class="run-premise"><strong id="header-workers">0</strong> <span id="premise-text">phones ready</span></p></div>
+          <div class="run-heading"><h1>GPUmaxxer</h1><p class="run-premise"><strong id="header-workers">0</strong> <span id="premise-text">phones ready</span></p></div>
           <span id="room-status" class="run-status">Waiting for phones</span>
         </header>
         <p id="run-result" class="run-result" hidden></p>
@@ -67,7 +67,6 @@
         </dialog>
 
         <footer class="control-bar">
-          <span>Laptop · keep this tab visible during runs</span>
           <div><button id="start" disabled>Start fresh run</button><button id="stop" disabled>Stop</button><button id="dev-toggle" aria-expanded="false" aria-controls="dev-panel">Dev</button></div>
         </footer>
 
@@ -107,7 +106,7 @@
 
       <!-- Phone (plain link): trains its share each round. -->
       <section id="worker" class="phone-preview" aria-label="Phone" hidden>
-        <header class="phone-header"><h1>GPUmaxxing</h1><span id="worker-state" class="worker-state">Connecting</span></header>
+        <header class="phone-header"><h1>GPUmaxxer</h1><span id="worker-state" class="worker-state">Connecting</span></header>
         <p class="phone-team" id="phone-team" hidden><strong id="phone-workers">0</strong> <span id="phone-team-text">phones · one shared model</span><span id="phone-room-speed" class="phone-room-speed"></span></p>
 
         <!-- The stages of this phone's current round, as they happen. -->
