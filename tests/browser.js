@@ -243,6 +243,23 @@ try {
   assert.deepEqual(mixed.workers.map(worker => worker.backend).sort(), ['webgl', 'webgpu']);
   await page.screenshot({ path: join(process.env.RUNS_DIR, 'laptop.png'), fullPage: true });
 
+  // Opening the laptop page again takes over from the old tab, which steps aside.
+  const reloaded = await browser.newPage();
+  reloaded.on('pageerror', error => errors.push(error.message));
+  await reloaded.addInitScript(() => {
+    window.sockets = [];
+    window.WebSocket = class extends WebSocket {
+      constructor(...args) { super(...args); window.sockets.push(this); }
+    };
+  });
+  await reloaded.goto(`${base}?role=laptop&dev`);
+  await page.waitForFunction(() => /took over/.test(document.querySelector('#connection').textContent));
+  await reloaded.waitForFunction(() => document.querySelector('#room-workers').textContent === '2');
+  // The laptop reconnects by itself after losing its connection, and still sees the phones.
+  await reloaded.evaluate(() => window.sockets[0].close());
+  await reloaded.waitForFunction(() => window.sockets.length === 2 && window.sockets[1].readyState === WebSocket.OPEN);
+  await reloaded.waitForFunction(() => !document.querySelector('#start').disabled);
+
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({
     environment: 'Headless Chromium / software WebGL. Correctness check, not a phone-speed benchmark.',
@@ -251,7 +268,7 @@ try {
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
     screenshot: join(process.env.RUNS_DIR, 'laptop.png'),
-    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, reconnect, and image tasks passed.',
+    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, reconnect, laptop takeover, and image tasks passed.',
   }, null, 2));
 } finally {
   await browser?.close();

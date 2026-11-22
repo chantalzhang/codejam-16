@@ -571,7 +571,14 @@ function connect() {
       void showStatus(message);
     } else if (message.type === 'coordinator-left') {
       if (!sittingOut) phoneState('Waiting', { inactive: true });
-      $('worker-status').textContent = 'Laptop disconnected. Waiting for it to come back.';
+      $('worker-status').textContent = 'Laptop reconnecting… Keep this page open.';
+    } else if (message.type === 'replaced') {
+      // Another laptop tab took over (e.g. this page was opened again). Don't fight it.
+      stayClosed = true;
+      trainer?.stop('Another laptop tab took over.');
+      status('Another laptop tab took over. Close this one.');
+      $(connectionId).textContent = 'Another laptop tab took over. Close this one.';
+      socket.close();
     } else if (message.type === 'error') {
       trainer?.stop(message.error);
       $(connectionId).textContent = `Relay error: ${message.error}`;
@@ -583,17 +590,21 @@ function connect() {
     connected = false;
     trainer?.stop('Relay disconnected.');
     refreshControls();
-    // Phones reconnect by themselves (wifi blips, locked screens) and rejoin from the next
-    // round, unless the person tapped Disconnect or the GPU reset.
-    if (role === 'worker' && !stayClosed) {
-      phoneState('Reconnecting', { inactive: true });
+    // Reconnect by ourselves (wifi blips, locked screens): phones rejoin from the next round,
+    // and the laptop can start a new run. Not after Disconnect, a GPU reset, or a takeover.
+    if (!stayClosed) {
+      if (role === 'worker') phoneState('Reconnecting', { inactive: true });
+      else {
+        status('Connection lost. Reconnecting…');
+        $('room-status').textContent = 'Reconnecting…';
+      }
       $(connectionId).textContent = 'Connection lost. Reconnecting…';
       reconnectTimer = setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 10_000);
       return;
     }
-    $(connectionId).textContent = 'Disconnected. Reload this page to reconnect.';
     if (role === 'worker') {
+      $(connectionId).textContent = 'Disconnected. Reload this page to reconnect.';
       phoneState('Disconnected', { inactive: true });
       $('disconnect').disabled = true;
     }
