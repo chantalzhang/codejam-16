@@ -22,6 +22,7 @@ try {
   const base = server.resolvedUrls.local[0];
   await page.goto(`${base}?role=laptop`);
   assert.equal(await page.locator('#worker-link').getAttribute('href'), base);
+  await page.waitForFunction(() => document.querySelector('#join-qr').src.startsWith('data:image/png'));
   await page.waitForFunction(() => document.querySelector('#connection').textContent.startsWith('Connected'));
   assert.equal(await page.locator('#role-title').textContent(), 'Shared training · laptop');
   assert.equal(await page.locator('#start').isDisabled(), true);
