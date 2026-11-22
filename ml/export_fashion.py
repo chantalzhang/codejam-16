@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["torch", "torchvision"]
 # ///
-"""Export a Fashion-MNIST subset for phones to download (stand-in demo task).
+"""Export a Fashion-MNIST subset for phones to download.
 
 Writes public/data/fashion-train-{0..4}.bin (5 slices of 2,000, so each phone downloads
 1.6 MB instead of all 7.8 MB), fashion-test.bin (1,000 held-out images for accuracy), and

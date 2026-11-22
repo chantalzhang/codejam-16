@@ -1,9 +1,8 @@
 import { packFloats, unpackFloats } from '../src/packing.js';
 
-// Routes messages between one coordinator and many workers, and combines each round's
-// updates so the coordinator gets one message per round however many workers there are.
-// It has no transport of its own, so the same logic runs in Node (server/relay.js, local
-// dev) and in a Cloudflare Durable Object (worker/index.js).
+// Routes messages between one coordinator and many workers, and sums each round's updates
+// so the coordinator gets one message per round. Shared by server/relay.js (Node) and
+// worker/index.js (Cloudflare).
 
 // The page's own origin, or a local dev page (http://127.0.0.1 or localhost) talking to a
 // hosted relay. Blocks other websites from connecting.

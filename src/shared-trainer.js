@@ -17,10 +17,9 @@ export function timingSummary(history) {
   };
 }
 
-// Local SGD: each round, every worker trains its own copy for `localSteps` steps on
-// `batchSize` examples per step. The laptop then treats minus the average change as a
-// gradient for an outer optimizer (DiLoCo-style); outer lr 1 with no momentum is plain
-// averaging. Nesterov momentum was ~2x faster in ml/sim.py.
+// Local SGD: each round, every worker trains its own copy for `localSteps` steps, then the
+// laptop applies minus the average change as a gradient to an outer Nesterov optimizer
+// (DiLoCo-style). Outer lr 1 with no momentum is plain averaging.
 export class SharedTrainer {
   constructor(task, { send, onProgress = () => {} }) {
     this.task = task;
@@ -137,8 +136,7 @@ export class SharedTrainer {
         checkCancelled();
         if (!run.workerIds.length) throw new Error('Every worker left.');
         // With a huge crowd, each round uses the workers that have waited longest, so everyone
-        // takes turns. Since the relay adds up updates, 500 per round took ~1 s per round in
-        // scripts/load-test.js (2.5x one phone). Sort is stable: ties keep join order.
+        // takes turns. Sort is stable: ties keep join order.
         const picked = [...run.workerIds]
           .sort((a, b) => (lastPicked.get(a) ?? 0) - (lastPicked.get(b) ?? 0))
           .slice(0, maxWorkersPerRound);

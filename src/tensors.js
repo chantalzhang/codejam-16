@@ -28,7 +28,7 @@ export function unpackValues(text, variables) {
   return variables.map(variable => Array.from(floats.subarray(offset, offset += variable.size)));
 }
 
-export function assignValues(variables, values) {
+function assignValues(variables, values) {
   validateValues(values, variables);
   tf.tidy(() => variables.forEach((variable, i) => {
     variable.assign(tf.tensor(values[i], variable.shape, 'float32'));

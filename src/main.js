@@ -42,7 +42,7 @@ $('enlarge-qr').addEventListener('click', () => $('join-dialog').showModal());
 
 let selected = tasks[0];
 let task, trainer, socket, backend;
-let connected = false, running = false;
+let connected = false;
 let workers = [];
 
 const formatMs = ms => `${Math.round(ms)} ms`;
@@ -81,6 +81,7 @@ let roomState = 'waiting';
 function status(message) { $('status').textContent = message; }
 const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
 function refreshControls() {
+  const running = roomState === 'training';
   $('start').disabled = !connected || running || !workers.some(canRun);
   $('stop').disabled = !running;
   for (const id of ['task', 'rounds', 'batch-size', 'local-steps', 'target', 'time-limit']) $(id).disabled = running;
@@ -208,8 +209,7 @@ function workerState(info, worker) {
   if (!worker.ready) return ['busy', 'joining…'];
   if (worker.note) return ['failed', worker.note];
   if (!canRun(worker)) return ['failed', 'different task version: reload this worker'];
-  if (info.activity) return [info.activity.startsWith('computing') ? 'busy' : 'ready', info.activity];
-  return ['ready', 'ready'];
+  return ['ready', info.activity ?? 'ready'];
 }
 function card(id, info) {
   const worker = workers.find(candidate => candidate.id === id);
@@ -506,7 +506,6 @@ $('start').addEventListener('click', async () => {
     else Object.assign(info, { examples: 0, activity: undefined, error: undefined });
   }
   const participants = workers.filter(canRun);
-  running = true;
   roomState = 'training';
   runResult = undefined;
   await resetModel();
@@ -527,15 +526,11 @@ $('start').addEventListener('click', async () => {
     if (ending) {
       const { accuracy, elapsedMs, workers: count } = ending;
       const [accuracyText, seconds, phones] = [(accuracy * 100).toFixed(1), (elapsedMs / 1000).toFixed(1), `${count} phone${count === 1 ? '' : 's'}`];
-      $('result').textContent = run.reachedTarget
-        ? `Reached ${accuracyText}% accuracy in ${seconds} s with ${phones}`
-        : `Time's up: ${accuracyText}% accuracy after ${seconds} s with ${phones}`;
-      $('result').hidden = false;
       runResult = run.reachedTarget
         ? `Reached ${accuracyText}% held-out accuracy in ${seconds} s with ${phones}`
         : `Time's up: ${accuracyText}% held-out accuracy after ${seconds} s with ${phones}`;
-      $('run-result').textContent = runResult;
-      $('run-result').hidden = false;
+      $('result').textContent = $('run-result').textContent = runResult;
+      $('result').hidden = $('run-result').hidden = false;
     }
     roomState = 'done';
     showScreen({ done: true });
@@ -546,7 +541,6 @@ $('start').addEventListener('click', async () => {
   } catch (error) {
     status(`Cannot start: ${error.message}`);
   } finally {
-    running = false;
     if (roomState === 'training') roomState = 'waiting';
     refreshControls();
     showRoom();
