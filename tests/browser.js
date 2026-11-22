@@ -20,7 +20,8 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 1100 } });
   page.on('pageerror', error => errors.push(error.message));
   const base = server.resolvedUrls.local[0];
-  await page.goto(base);
+  await page.goto(`${base}?role=laptop`);
+  assert.equal(await page.locator('#worker-link').getAttribute('href'), base);
   await page.waitForFunction(() => document.querySelector('#connection').textContent.startsWith('Connected'));
   assert.equal(await page.locator('#role-title').textContent(), 'Shared training · laptop');
   assert.equal(await page.locator('#start').isDisabled(), true);

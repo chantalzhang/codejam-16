@@ -6,7 +6,9 @@ import { tasks } from './tasks.js';
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-const role = params.get('role') === 'worker' ? 'worker' : 'coordinator';
+// The plain link is the phone page, so the link you share can't open (or take over) the
+// laptop page. The laptop page is ?role=laptop.
+const role = params.get('role') === 'laptop' ? 'coordinator' : 'worker';
 // Workers use WebGPU when the browser has it: WebGL froze iPhones mid-training.
 // Override for testing, e.g. ?role=worker&backend=webgl.
 const preferredBackend = BACKENDS.includes(params.get('backend')) ? params.get('backend')
@@ -15,7 +17,7 @@ const preferredBackend = BACKENDS.includes(params.get('backend')) ? params.get('
 // (lets the laptop page run locally, so runs still save, while phones use the hosted pages).
 const relayUrl = params.get('relay') ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/swarm`;
 const relayPage = new URL(relayUrl.replace(/^ws/, 'http'));
-$('worker-link').href = `${relayPage.origin}/?role=worker`;
+$('worker-link').href = `${relayPage.origin}/`;
 $('role-title').textContent = role === 'coordinator' ? 'Shared training · laptop' : 'Shared training · worker';
 $(role).hidden = false;
 for (const { taskId, name } of tasks) $('task').add(new Option(name, taskId));
@@ -156,7 +158,7 @@ async function saveRun(run) {
     if (!response.ok) throw new Error();
     $('saved').textContent = `Saved: ${(await response.json()).file}`;
   } catch {
-    $('saved').textContent = 'Not saved. Open the laptop page at http://127.0.0.1 to save runs.';
+    $('saved').textContent = 'Not saved. Open the laptop page at http://127.0.0.1:4173/?role=laptop to save runs.';
   }
 }
 

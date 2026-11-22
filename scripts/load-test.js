@@ -26,7 +26,7 @@ const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--ena
 const results = [];
 try {
   const page = await browser.newPage();
-  await page.goto(base);
+  await page.goto(`${base}?role=laptop`);
   await page.waitForFunction(() => document.querySelector('#connection').textContent.startsWith('Connected'));
   await page.locator('#task').selectOption('fashion-mnist-v1');
   await page.locator('#rounds').fill(values.rounds);
