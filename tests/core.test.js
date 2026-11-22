@@ -299,6 +299,29 @@ test('a worker that leaves mid-round is not waited for, and later rounds go on w
   } finally { task.dispose(); }
 });
 
+test('a worker that joins mid-run gets the current model from the next round', async () => {
+  const task = createTask();
+  const firstWeights = {};
+  const trainer = new SharedTrainer(task, {
+    send(message) {
+      firstWeights[message.to] ??= message.weights;
+      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
+        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 });
+    },
+    onProgress(point) {
+      if (point.round === 1) trainer.addWorker('late');
+      if (point.round === 2) trainer.addWorker('early'); // Already in the run: ignored.
+    },
+  });
+  try {
+    const run = await trainer.train({ workerIds: ['early'], rounds: 3, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    assert.deepEqual(run.history.slice(1).map(point => point.updates.length), [1, 2, 2]);
+    sameWeights(firstWeights.late, [[-0.1], [-0.1]]); // The model after round 1.
+    assert.deepEqual(run.participants, ['early', 'late']);
+  } finally { task.dispose(); }
+});
+
 test('the run fails once every worker has left', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, { send: message => queueMicrotask(() => trainer.removeWorker(message.to, 'left')) });
