@@ -14,11 +14,12 @@
 
       <div id="coordinator" class="split" hidden>
         <section class="panel">
-          <h2>Laptop <small>combines gradients into one model</small></h2>
+          <h2>Laptop <small>averages the workers' changes into one model</small></h2>
           <div class="controls">
             <label>Task <select id="task"></select></label>
-            <label>Examples per step <input id="batch-size" type="number" min="1" max="100000" /></label>
-            <label>Steps <input id="steps" type="number" min="1" max="10000" /></label>
+            <label>Images per phone per step <input id="batch-size" type="number" min="1" max="1000" /></label>
+            <label>Local steps per round <input id="local-steps" type="number" min="1" max="100" /></label>
+            <label>Rounds <input id="rounds" type="number" min="1" max="10000" /></label>
           </div>
           <p id="task-note" class="hint"></p>
           <div class="controls">
@@ -27,14 +28,14 @@
           </div>
           <p id="status" class="state" role="status" aria-live="polite">Open a worker, then start.</p>
           <dl class="metrics">
-            <div><dt>Step</dt><dd id="step">—</dd></div>
+            <div><dt>Round</dt><dd id="round">—</dd></div>
             <div><dt>Accuracy</dt><dd id="accuracy">—</dd></div>
             <div><dt>Loss (lower is better)</dt><dd id="loss">—</dd></div>
             <div><dt>Elapsed</dt><dd id="elapsed">—</dd></div>
           </dl>
-          <h3>Time per step <small>average, skips warm-up step 1</small></h3>
+          <h3>Time per round <small>average, skips warm-up round 1</small></h3>
           <dl class="metrics">
-            <div><dt>Total</dt><dd id="step-time">—</dd></div>
+            <div><dt>Total</dt><dd id="round-time">—</dd></div>
             <div><dt>Slowest worker</dt><dd id="compute-time">—</dd></div>
             <div><dt>Network</dt><dd id="network-time">—</dd></div>
             <div><dt>Laptop</dt><dd id="coordinator-time">—</dd></div>
@@ -51,7 +52,7 @@
       </div>
 
       <section id="worker" class="panel" hidden>
-        <h2>Worker <small>computes gradients on its share of each step</small></h2>
+        <h2>Worker <small>trains its own copy, then sends back the change</small></h2>
         <p id="worker-status" class="state" role="status">Waiting for the laptop to start a run.</p>
         <dl class="metrics">
           <div><dt>Examples this run</dt><dd id="examples">0</dd></div>

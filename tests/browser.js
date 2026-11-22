@@ -24,7 +24,7 @@ try {
   assert.equal(await page.locator('#role-title').textContent(), 'Shared training · laptop');
   assert.equal(await page.locator('#start').isDisabled(), true);
   assert.equal(await page.locator('#worker-count').textContent(), '0');
-  assert.equal(await page.locator('label').filter({ has: page.locator('#batch-size') }).textContent(), 'Examples per step ');
+  assert.equal(await page.locator('label').filter({ has: page.locator('#batch-size') }).textContent(), 'Images per phone per step ');
   assert.equal(await page.locator('#task').inputValue(), 'fashion-mnist-v1');
   await page.locator('#task').selectOption('linear-function-v1');
 
@@ -53,9 +53,10 @@ try {
     lastSaved = await page.locator('#saved').textContent();
     return JSON.parse(await readFile(lastSaved.slice('Saved: '.length), 'utf8'));
   }
-  async function run(steps = 40, batchSize = 17) {
-    await page.locator('#steps').fill(String(steps));
+  async function run(rounds = 40, batchSize = 17, localSteps = 1) {
+    await page.locator('#rounds').fill(String(rounds));
     await page.locator('#batch-size').fill(String(batchSize));
+    await page.locator('#local-steps').fill(String(localSteps));
     await page.locator('#start').click();
     const result = await savedRun();
     assert.equal(result.outcome, 'completed', result.reason);
@@ -64,7 +65,7 @@ try {
 
   const first = await addWorker();
   await readyWorkers(1);
-  const one = await run();
+  const one = await run(40, 3 * 17); // Same examples per round as 3 workers × 17 below.
   assert.match(await first.locator('#gpu-memory').textContent(), /^\d+ KB$|^\d+\.\d MB$/);
   const tensorsAfterOne = await first.locator('#tensors').textContent();
   await addWorker();
@@ -80,37 +81,37 @@ try {
   assert.match(await cards.first().locator('h3').textContent(), /^Worker 1 · Mac · WebGL$/);
   const cardTensors = await cards.first().locator('dt:text("Tensors") + dd').textContent();
   assert.equal(cardTensors, tensorsAfterOne);
-  assert.equal(three.workers.reduce((sum, worker) => sum + worker.examples, 0), 40 * 17);
+  assert.equal(three.workers.reduce((sum, worker) => sum + worker.examples, 0), 40 * 3 * 17);
   assert.ok(three.workers.every(worker => worker.backend === 'webgl' && worker.device === 'Mac'));
 
   assert.equal(three.history.length, 41);
-  assert.equal(three.timing.steps, 39);
+  assert.equal(three.timing.rounds, 39);
   assert.ok(Object.values(three.timing).every(Number.isFinite));
   assert.match(await page.locator('#network-time').textContent(), /^-?\d+ ms$/);
   assert.ok(three.history.at(-1).loss < 0.01);
   for (const point of three.history.slice(1)) {
     assert.equal(point.updates.length, 3);
-    assert.equal(point.updates.reduce((sum, update) => sum + update.count, 0), 17);
+    assert.equal(point.updates.reduce((sum, update) => sum + update.count, 0), 3 * 17);
   }
   for (let i = 0; i < one.history.length; i++) {
     assert.ok(Math.abs(one.history[i].loss - three.history[i].loss) < 1e-5, 'Worker count changed the training trajectory');
   }
 
-  await page.locator('#steps').fill('10000');
+  await page.locator('#rounds').fill('10000');
   await page.locator('#start').click();
-  await page.waitForFunction(() => /^\d+ \//.test(document.querySelector('#step').textContent) && parseInt(document.querySelector('#step').textContent) >= 1);
+  await page.waitForFunction(() => /^\d+ \//.test(document.querySelector('#round').textContent) && parseInt(document.querySelector('#round').textContent) >= 1);
   await page.locator('#stop').click();
   assert.equal((await savedRun()).outcome, 'stopped');
 
   await page.locator('#start').click();
-  await page.waitForFunction(() => parseInt(document.querySelector('#step').textContent) >= 1);
+  await page.waitForFunction(() => parseInt(document.querySelector('#round').textContent) >= 1);
   await third.close();
   const disconnected = await savedRun();
   assert.equal(disconnected.outcome, 'stopped');
   assert.match(disconnected.reason, /disconnected/);
   await readyWorkers(2);
   assert.equal(await page.locator('#workers .card.left').count(), 1, 'A worker that left stays visible until the next run');
-  await run(3); // Old in-flight gradients must not contaminate this new run.
+  await run(3); // Old in-flight updates must not contaminate this new run.
   assert.equal(await page.locator('#workers .card.left').count(), 0);
 
   // Small image-task run on software WebGL: checks the CNN path and timing breakdown.
@@ -118,19 +119,22 @@ try {
   const image = await run(3, 8);
   assert.equal(image.taskId, 'image-benchmark-v1');
 
-  // Short Fashion-MNIST run: workers download data, the laptop reports accuracy.
+  assert.equal(image.timing.rounds, 2);
+  assert.ok(Object.values(image.timing).every(Number.isFinite));
+
+  // Short Fashion-MNIST run with local SGD: Adam, 2 local steps per round, accuracy reported.
   await page.locator('#task').selectOption('fashion-mnist-v1');
-  const fashion = await run(3, 8);
+  const fashion = await run(3, 8, 2);
+  assert.equal(fashion.optimizer, 'adam');
+  assert.ok(fashion.history.slice(1).every(point => point.updates.every(update => update.count === 8 * 2)));
   assert.ok(fashion.history.every(point => point.accuracy >= 0 && point.accuracy <= 1));
   assert.match(await page.locator('#accuracy').textContent(), /^\d+\.\d%$/);
-  assert.equal(image.timing.steps, 2);
-  assert.ok(Object.values(image.timing).every(Number.isFinite));
 
   // Simulate a phone GPU reset mid-run: the run must end quickly, and the laptop must say why.
   await page.locator('#task').selectOption('linear-function-v1');
-  await page.locator('#steps').fill('10000');
+  await page.locator('#rounds').fill('10000');
   await page.locator('#start').click();
-  await page.waitForFunction(() => parseInt(document.querySelector('#step').textContent) >= 1);
+  await page.waitForFunction(() => parseInt(document.querySelector('#round').textContent) >= 1);
   const resetAt = Date.now();
   await first.evaluate(async () => {
     // Import the exact module URL the page loaded, so this is the page's TF.js instance.
@@ -142,7 +146,7 @@ try {
   await first.waitForFunction(() => /GPU reset/.test(document.querySelector('#worker-status').textContent));
   const gpuReset = await savedRun();
   assert.ok(Date.now() - resetAt < 5_000, 'Run did not end promptly after a GPU reset');
-  // Mid-step resets report "GPU reset"; resets between steps show up as a disconnect.
+  // Mid-round resets report "GPU reset"; resets between rounds show up as a disconnect.
   assert.notEqual(gpuReset.outcome, 'completed');
   assert.match(gpuReset.reason, /GPU reset|disconnected/);
   await page.waitForFunction(() => /GPU reset/.test(document.querySelector('#workers .card.left .state')?.textContent));
@@ -152,7 +156,7 @@ try {
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({
     environment: 'Headless Chromium / software WebGL. Correctness check, not a phone-speed benchmark.',
-    steps: 40, fixedGlobalBatchSize: 17,
+    rounds: 40, imagesPerWorkerPerStep: 17,
     initialLoss: three.history[0].loss,
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,

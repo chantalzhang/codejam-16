@@ -4,7 +4,7 @@ import * as tf from '@tensorflow/tfjs';
 // Not the final demo model.
 export const name = 'Image benchmark (small CNN)';
 export const description = 'Benchmark task: a small CNN classifies generated 32×32 stripe and ring images (4 classes). Measures phone compute vs. network time.';
-export const defaults = { steps: 30, batchSize: 32, learningRate: 0.1 };
+export const defaults = { rounds: 30, batchSize: 32, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 };
 export const taskId = 'image-benchmark-v1';
 
 const SIZE = 32;

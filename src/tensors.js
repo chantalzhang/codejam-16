@@ -19,17 +19,33 @@ export function assignValues(variables, values) {
   }));
 }
 
-export async function computeGradients(task, batchSpec) {
+export function createOptimizer(name, learningRate) {
+  if (name === 'adam') return tf.train.adam(learningRate);
+  if (name === 'sgd') return tf.train.sgd(learningRate);
+  throw new Error(`Unknown optimizer: ${name}`);
+}
+
+// Starts from the shared weights, trains for several steps, and returns the weight change.
+export async function trainLocally(task, optimizer, weights, { firstStep, localSteps, offset, count }) {
   const started = performance.now();
-  const batch = await task.makeBatch(batchSpec);
-  let result;
+  assignValues(task.variables, weights);
+  const losses = [];
   try {
-    result = tf.tidy(() => tf.variableGrads(() => task.loss(batch), task.variables));
-    const gradients = await readValues(task.variables.map(variable => result.grads[variable.name]));
-    const loss = (await result.value.data())[0];
-    return { gradients, loss, computeMs: performance.now() - started };
+    for (let i = 0; i < localSteps; i++) {
+      const batch = await task.makeBatch({ step: firstStep + i, offset, count });
+      try {
+        losses.push(optimizer.minimize(() => task.loss(batch), true, task.variables));
+      } finally {
+        tf.dispose(batch);
+      }
+    }
+    const after = await readValues(task.variables);
+    const meanLoss = tf.tidy(() => tf.addN(losses).div(localSteps));
+    const loss = (await meanLoss.data())[0];
+    meanLoss.dispose();
+    const delta = after.map((values, i) => values.map((value, j) => value - weights[i][j]));
+    return { delta, loss, computeMs: performance.now() - started };
   } finally {
-    tf.dispose(result);
-    tf.dispose(batch);
+    tf.dispose(losses);
   }
 }
