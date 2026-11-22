@@ -276,6 +276,7 @@ $('start').addEventListener('click', async () => {
     const run = await trainer.train({
       workerIds: participants.map(worker => worker.id), rounds, batchSize, localSteps,
       optimizer: selected.defaults.optimizer, learningRate: selected.defaults.learningRate,
+      outerLearningRate: selected.defaults.outerLearningRate, outerMomentum: selected.defaults.outerMomentum,
     });
     const outcome = { completed: 'Completed', stopped: 'Stopped', failed: 'Failed' }[run.outcome];
     status(`${outcome}: ${run.history.at(-1)?.round ?? 0} of ${rounds} rounds.${run.reason ? ' ' + run.reason : ''}`);

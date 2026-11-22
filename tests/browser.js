@@ -127,6 +127,7 @@ try {
   await page.locator('#task').selectOption('fashion-mnist-v1');
   const fashion = await run(3, 8, 2);
   assert.equal(fashion.optimizer, 'adam');
+  assert.deepEqual([fashion.outerLearningRate, fashion.outerMomentum], [0.5, 0.9]);
   assert.ok(fashion.history.slice(1).every(point => point.updates.every(update => update.count === 8 * 2)));
   assert.ok(fashion.history.every(point => point.accuracy >= 0 && point.accuracy <= 1));
   assert.match(await page.locator('#accuracy').textContent(), /^\d+\.\d%$/);

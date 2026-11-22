@@ -30,7 +30,9 @@ export function timingSummary(history) {
 }
 
 // Local SGD: each round, every worker trains its own copy for `localSteps` steps on
-// `batchSize` examples per step, then the shared model moves by the average change.
+// `batchSize` examples per step. The laptop then treats minus the average change as a
+// gradient for an outer optimizer (DiLoCo-style); outer lr 1 with no momentum is plain
+// averaging. Nesterov momentum was ~2x faster in ml/sim.py.
 export class SharedTrainer {
   constructor(task, { send, onProgress = () => {} }) {
     this.task = task;
@@ -94,19 +96,25 @@ export class SharedTrainer {
     }
   }
 
-  async train({ workerIds, rounds, batchSize, localSteps, optimizer, learningRate, timeoutMs = 30_000 }) {
+  async train({
+    workerIds, rounds, batchSize, localSteps, optimizer, learningRate,
+    outerLearningRate = 1, outerMomentum = 0, timeoutMs = 30_000,
+  }) {
     if (this.active) throw new Error('A run is already active.');
     if (!workerIds.length || new Set(workerIds).size !== workerIds.length ||
         ![rounds, batchSize, localSteps].every(value => Number.isInteger(value) && value > 0) ||
-        !Number.isFinite(learningRate) || learningRate <= 0 ||
+        ![learningRate, outerLearningRate].every(value => Number.isFinite(value) && value > 0) ||
+        !(outerMomentum >= 0 && outerMomentum < 1) ||
         !Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid training settings.');
     // Worker i always gets examples [i × batchSize, (i + 1) × batchSize) of each global step.
     const assignments = workerIds.map((workerId, i) => ({ workerId, offset: i * batchSize, count: batchSize }));
     const run = {
       id: crypto.randomUUID(), taskId: this.task.id, workerIds, rounds, batchSize, localSteps,
-      optimizer, learningRate, startedAt: new Date().toISOString(), history: [], outcome: 'running',
+      optimizer, learningRate, outerLearningRate, outerMomentum,
+      startedAt: new Date().toISOString(), history: [], outcome: 'running',
     };
     this.active = run;
+    const buffers = this.task.variables.map(variable => tf.tidy(() => tf.variable(tf.zerosLike(variable), false)));
     const started = performance.now();
     const checkCancelled = () => { if (run.cancelReason) throw new Error(run.cancelReason); };
     const record = async (round, updates = [], waitMs = 0) => {
@@ -129,8 +137,11 @@ export class SharedTrainer {
         const waitMs = performance.now() - waitStarted;
         checkCancelled();
         const average = averageUpdates(updates, this.task.variables);
+        // Nesterov, same formula as torch.optim.SGD: buf = m * buf + g; w -= lr * (g + m * buf).
         tf.tidy(() => this.task.variables.forEach((variable, i) => {
-          variable.assign(variable.add(tf.tensor(average[i], variable.shape, 'float32')));
+          const gradient = tf.tensor(average[i], variable.shape, 'float32').neg();
+          buffers[i].assign(buffers[i].mul(outerMomentum).add(gradient));
+          variable.assign(variable.sub(gradient.add(buffers[i].mul(outerMomentum)).mul(outerLearningRate)));
         }));
         await record(round, updates.map(({ workerId, count, loss, computeMs }) => ({
           workerId, count, loss, computeMs,
@@ -141,6 +152,7 @@ export class SharedTrainer {
       run.outcome = run.cancelReason ? 'stopped' : 'failed';
       run.reason = error.message;
     } finally {
+      tf.dispose(buffers);
       this.active = null;
     }
     run.elapsedMs = performance.now() - started;
