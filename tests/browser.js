@@ -117,6 +117,19 @@ try {
   assert.ok(leftRun.history.slice(-3).every(point => point.updates.length === 2));
   await readyWorkers(2);
   assert.equal(await page.locator('#workers .card.left').count(), 1, 'A worker that left stays visible until the next run');
+
+  // A worker opening the page mid-run joins the next round.
+  await page.locator('#start').click();
+  await page.waitForFunction(() => parseInt(document.querySelector('#round').textContent) >= 1);
+  const joiner = await addWorker();
+  const roundAtJoin = await roundNow();
+  await page.waitForFunction(start => parseInt(document.querySelector('#round').textContent) >= start + 5, roundAtJoin);
+  await page.locator('#stop').click();
+  const joinRun = await savedRun();
+  assert.equal(joinRun.workers.length, 3);
+  assert.ok(joinRun.history.slice(-3).every(point => point.updates.length === 3));
+  await joiner.close();
+  await readyWorkers(2);
   await run(3); // Old in-flight updates must not contaminate this new run.
   assert.equal(await page.locator('#workers .card.left').count(), 0);
 

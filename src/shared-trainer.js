@@ -73,6 +73,15 @@ export class SharedTrainer {
     pending.settle();
   }
 
+  // A worker connected mid-run: it gets the current model and trains from the next round.
+  // Workers already in this run (including dropped ones) are not re-added.
+  addWorker(workerId) {
+    const run = this.active;
+    if (!run || run.cancelReason || run.participants.includes(workerId)) return;
+    run.participants.push(workerId);
+    run.workerIds.push(workerId);
+  }
+
   // A worker left: stop waiting for it this round and leave it out of later rounds.
   removeWorker(workerId, reason) {
     const run = this.active;
@@ -136,7 +145,8 @@ export class SharedTrainer {
         !(outerMomentum >= 0 && outerMomentum < 1) ||
         !Number.isFinite(deadlineMs) || deadlineMs <= 0) throw new Error('Invalid training settings.');
     const run = {
-      id: crypto.randomUUID(), taskId: this.task.id, workerIds: [...workerIds], rounds, batchSize, localSteps,
+      id: crypto.randomUUID(), taskId: this.task.id, workerIds: [...workerIds], participants: [...workerIds],
+      rounds, batchSize, localSteps,
       optimizer, learningRate, outerLearningRate, outerMomentum,
       startedAt: new Date().toISOString(), history: [], outcome: 'running',
     };

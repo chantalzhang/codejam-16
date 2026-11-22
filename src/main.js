@@ -119,10 +119,11 @@ function showWorkers() {
   $('worker-count').textContent = workers.length;
   $('workers').replaceChildren(...[...infos].map(([id, info]) => card(id, info)));
   if (!infos.size) $('workers').textContent = 'No workers yet. Open a worker tab or the phone link.';
-  // Workers that disconnect mid-run just leave it; the run continues without them.
+  // Workers that disconnect mid-run just leave it; new ones join from the next round.
   for (const id of [...trainer?.active?.workerIds ?? []]) {
     if (!workers.some(worker => worker.id === id && worker.ready)) trainer.removeWorker(id, 'left');
   }
+  for (const worker of workers.filter(canRun)) trainer?.addWorker(worker.id);
   refreshControls();
 }
 function snapshot(id) {
@@ -284,7 +285,7 @@ $('start').addEventListener('click', async () => {
     const outcome = { completed: 'Completed', stopped: 'Stopped', failed: 'Failed' }[run.outcome];
     status(`${outcome}: ${run.history.at(-1)?.round ?? 0} of ${rounds} rounds.${run.reason ? ' ' + run.reason : ''}`);
     await saveRun({
-      ...run, timing: timingSummary(run.history), workers: participants.map(worker => snapshot(worker.id)),
+      ...run, timing: timingSummary(run.history), workers: run.participants.map(snapshot),
       coordinatorBackend: backend, userAgent: navigator.userAgent,
     });
   } catch (error) {
