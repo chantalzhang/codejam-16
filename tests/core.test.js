@@ -277,6 +277,39 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
   } finally { task.dispose(); }
 });
 
+test('a worker that leaves mid-round is not waited for, and later rounds go on without it', async () => {
+  const task = createTask();
+  const trainer = new SharedTrainer(task, {
+    send(message) {
+      if (message.to === 'leaving') return queueMicrotask(() => trainer.removeWorker('leaving', 'left'));
+      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
+        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 });
+    },
+  });
+  try {
+    // A long deadline: the run only finishes quickly if it stops waiting for the leaver.
+    const started = Date.now();
+    const run = await trainer.train({ workerIds: ['staying', 'leaving'], rounds: 3, batchSize: 8, localSteps: 1,
+      optimizer: 'sgd', learningRate: 0.1, deadlineMs: 60_000 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    assert.ok(Date.now() - started < 1000);
+    assert.deepEqual(run.history[1].dropped, [{ workerId: 'leaving', reason: 'left' }]);
+    assert.deepEqual(run.workerIds, ['staying']);
+    assert.ok(run.history.slice(2).every(point => point.updates.length === 1));
+  } finally { task.dispose(); }
+});
+
+test('the run fails once every worker has left', async () => {
+  const task = createTask();
+  const trainer = new SharedTrainer(task, { send: message => queueMicrotask(() => trainer.removeWorker(message.to, 'left')) });
+  try {
+    const run = await trainer.train({ workerIds: ['a'], rounds: 3, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
+    assert.equal(run.outcome, 'failed');
+    assert.match(run.reason, /left/);
+    assert.deepEqual(await readValues(task.variables), [[0], [0]]);
+  } finally { task.dispose(); }
+});
+
 test('a worker with a wrong example count is dropped rather than skewing the average', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, {
