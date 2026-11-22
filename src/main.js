@@ -110,6 +110,10 @@ function refreshControls() {
   $('start').disabled = !connected || running || !workers.some(canRun);
   $('stop').disabled = !running;
   for (const id of ['task', 'rounds', 'batch-size', 'local-steps', 'target', 'time-limit']) $(id).disabled = running;
+  for (const button of $('task-picker').children) {
+    button.disabled = running;
+    button.setAttribute('aria-pressed', button.dataset.task === selected.taskId);
+  }
 }
 const TIMING_IDS = { roundMs: 'round-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
 const readyPhones = () => workers.filter(canRun).length;
@@ -632,6 +636,7 @@ async function initialize() {
   if (role === 'coordinator') {
     showTask();
     void resetModel();
+    void showTaskPicker();
   }
   connect();
   if (role === 'coordinator') showWorkers();
@@ -702,6 +707,31 @@ $('start').addEventListener('click', async () => {
     showRoom();
   }
 });
+// The task buttons at the top of the big screen, with a picture of each task.
+async function showTaskPicker() {
+  const buttons = await Promise.all(tasks.filter(task => task.displayExamples).map(async task => {
+    const urls = (await task.displayExamples()).map(example => imageUrl(example.image));
+    const button = document.createElement('button');
+    button.className = 'task-option';
+    button.dataset.task = task.taskId;
+    const thumbnail = Object.assign(document.createElement('img'), { src: urls[0], alt: '' });
+    const preview = document.createElement('span');
+    preview.className = 'task-preview';
+    const images = document.createElement('span');
+    images.className = 'task-preview-images';
+    images.append(...urls.map(src => Object.assign(document.createElement('img'), { src, alt: '' })));
+    preview.append(images, Object.assign(document.createElement('p'), { textContent: task.description }));
+    button.append(thumbnail, task.name, preview);
+    button.addEventListener('click', () => {
+      $('task').value = task.taskId;
+      $('task').dispatchEvent(new Event('change'));
+    });
+    return button;
+  }));
+  $('task-picker').replaceChildren(...buttons);
+  refreshControls();
+}
+
 $('task').addEventListener('change', () => {
   selected = tasks.find(({ taskId }) => taskId === $('task').value);
   roomState = 'waiting';

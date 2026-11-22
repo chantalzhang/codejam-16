@@ -12,7 +12,11 @@
       <section id="coordinator" class="projector-preview" aria-label="Training monitor" hidden>
         <header class="run-header">
           <div class="run-heading"><h1>GPUmaxxer</h1><p class="run-premise"><strong id="header-workers">0</strong> <span id="premise-text">phones ready</span></p></div>
-          <span id="room-status" class="run-status">Waiting for phones</span>
+          <div class="run-controls">
+            <!-- The image tasks to pick from. Line fit (a test task) is only in Dev. -->
+            <nav class="task-picker" id="task-picker" aria-label="Task"></nav>
+            <span id="room-status" class="run-status">Waiting for phones</span>
+          </div>
         </header>
         <p id="run-result" class="run-result" hidden></p>
 
