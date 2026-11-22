@@ -1,4 +1,5 @@
 import './style.css';
+import QRCode from 'qrcode';
 import { BACKENDS, backendLabel, initializeBackend, memoryUsage, onGpuReset } from './backend.js';
 import { SharedTrainer, timingSummary } from './shared-trainer.js';
 import { createOptimizer, packValues, trainLocally, unpackValues } from './tensors.js';
@@ -18,6 +19,10 @@ const preferredBackend = BACKENDS.includes(params.get('backend')) ? params.get('
 const relayUrl = params.get('relay') ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/swarm`;
 const relayPage = new URL(relayUrl.replace(/^ws/, 'http'));
 $('worker-link').href = `${relayPage.origin}/`;
+$('worker-link').textContent = relayPage.host;
+if (role === 'coordinator') {
+  void QRCode.toDataURL(`${relayPage.origin}/`, { margin: 1, width: 320 }).then(url => { $('join-qr').src = url; });
+}
 $('role-title').textContent = role === 'coordinator' ? 'Shared training · laptop' : 'Shared training · worker';
 $(role).hidden = false;
 for (const { taskId, name } of tasks) $('task').add(new Option(name, taskId));

@@ -16,6 +16,7 @@
   "dependencies": {
     "@tensorflow/tfjs": "4.22.0",
     "@tensorflow/tfjs-backend-webgpu": "4.22.0",
+    "qrcode": "1.5.4",
     "ws": "8.23.0"
   },
   "devDependencies": {
