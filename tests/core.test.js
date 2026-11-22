@@ -176,6 +176,25 @@ test('three workers learn with Adam and several local steps per round', async ()
   assert.ok(run.history.slice(1).every(point => point.updates.every(update => update.count === 17 * 5)));
 });
 
+test('the outer Nesterov step follows the same formula as ml/sim.py (PyTorch)', async () => {
+  const task = createTask();
+  // Every worker moves each weight by d = -0.1, so the outer gradient is g = 0.1 each round.
+  const trainer = new SharedTrainer(task, {
+    send(message) {
+      trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
+        count: message.count, delta: [[-0.1], [-0.1]], loss: 1, computeMs: 1 });
+    },
+  });
+  try {
+    const run = await trainer.train({ workerIds: ['a', 'b'], rounds: 2, batchSize: 8, localSteps: 1,
+      optimizer: 'sgd', learningRate: 0.1, outerLearningRate: 0.5, outerMomentum: 0.9 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    // PyTorch Nesterov: buf = 0.9 * buf + g; w -= 0.5 * (g + 0.9 * buf).
+    // Round 1: buf = 0.1, step 0.5 * 0.19 = 0.095. Round 2: buf = 0.19, step 0.5 * 0.271 = 0.1355.
+    sameWeights(await readValues(task.variables), [[-0.2305], [-0.2305]]);
+  } finally { task.dispose(); }
+});
+
 test('stale, duplicate, and unassigned updates cannot enter a round', async () => {
   const task = createTask();
   const trainer = new SharedTrainer(task, {
