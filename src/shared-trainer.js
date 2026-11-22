@@ -118,12 +118,14 @@ export class SharedTrainer {
     const started = performance.now();
     const checkCancelled = () => { if (run.cancelReason) throw new Error(run.cancelReason); };
     const record = async (round, updates = [], waitMs = 0, dropped = []) => {
-      // Tasks return a loss, or { loss, accuracy }.
+      // Tasks return a loss, or { loss, accuracy }. Tasks with display images also report the
+      // model's class probabilities on them, for the big screen.
       const evaluation = await this.task.evaluate();
       const { loss, accuracy } = typeof evaluation === 'number' ? { loss: evaluation } : evaluation;
+      const display = await this.task.predictDisplay?.();
       checkCancelled();
       if (!Number.isFinite(loss)) throw new Error('Evaluation loss is not finite.');
-      const point = { round, loss, accuracy, elapsedMs: performance.now() - started, waitMs, updates, dropped };
+      const point = { round, loss, accuracy, display, elapsedMs: performance.now() - started, waitMs, updates, dropped };
       run.history.push(point);
       this.onProgress(point, run.history);
       return point;

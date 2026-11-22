@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
 import * as imageTask from '../src/image-task.js';
-import { decode, sliceFor } from '../src/fashion-task.js';
+import { classes, decode, sliceFor } from '../src/fashion-task.js';
 import { SharedTrainer, timingSummary } from '../src/shared-trainer.js';
 import { createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
 import { createRelay } from '../server/relay-core.js';
@@ -123,6 +123,9 @@ test('Fashion-MNIST files decode into images with valid labels', async () => {
   assert.throws(() => decode(new Uint8Array(100)), /file size/);
   // Workers take slices in join order; the 6th worker wraps back to slice 0.
   assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map(sliceFor), [0, 1, 2, 3, 4, 0, 1]);
+  // Four held-out images to show on screen: ankle boot, trouser, bag, shirt.
+  const display = decode(new Uint8Array(await readFile('public/data/fashion-display.bin')));
+  assert.deepEqual(Array.from(display.labels, label => classes[label]), ['Ankle boot', 'Trouser', 'Bag', 'Shirt']);
 });
 
 test('timing summary skips warm-up and splits each round into compute, network, and coordinator time', () => {
@@ -243,6 +246,15 @@ test('a run stops as soon as it reaches the target accuracy, and says when', asy
     assert.equal(run.history.length, 3); // Rounds 0, 1, 2: stopped at 70%, not after 10 rounds.
     assert.deepEqual([run.reachedTarget.round, run.reachedTarget.accuracy, run.reachedTarget.workers], [2, 0.7, 2]);
     assert.ok(run.reachedTarget.elapsedMs >= 0);
+  } finally { task.dispose(); }
+});
+
+test('each round records the model probabilities on the display images, when the task has them', async () => {
+  const task = createTask();
+  task.predictDisplay = async () => [[0.25, 0.75]];
+  try {
+    const run = await swarm(task, { a: steady() }).train({ rounds: 2 });
+    assert.ok(run.history.every(point => point.display?.[0][1] === 0.75));
   } finally { task.dispose(); }
 });
 

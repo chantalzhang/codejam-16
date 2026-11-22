@@ -17,6 +17,7 @@ export function createRelay() {
   let coordinator = null; // { id, send }
   let pending = null; // The round in progress, see startRound.
   let workersJoined = 0; // Gives each worker a join number, e.g. to pick a data slice.
+  let lastStatus = null; // The laptop's latest status for phones, also sent to new joiners.
   const presence = () => coordinator?.send({
     type: 'presence',
     workers: [...workers].map(([id, { ready, backend, tasks, device, note }]) => ({ id, ready, backend, tasks, device, note })),
@@ -116,6 +117,7 @@ export function createRelay() {
           if (role === 'coordinator') coordinator = { id, send };
           else workers.set(id, { send, ready: false });
           send({ type: 'welcome', id, role, ...(role === 'worker' && { joinNumber: workersJoined++ }) });
+          if (role === 'worker' && lastStatus) send(lastStatus);
           presence();
         } else if (role === 'worker' && message.type === 'ready') {
           if (!['webgl', 'webgpu', 'cpu'].includes(message.backend) || !Array.isArray(message.tasks) ||
@@ -131,6 +133,10 @@ export function createRelay() {
             throw new Error('Expected round assignments and a deadline.');
           }
           startRound(message);
+        } else if (role === 'coordinator' && message.type === 'status') {
+          // Small run status for the phone screens (phone count, state, the model's guesses).
+          lastStatus = message;
+          for (const worker of workers.values()) worker.send(message);
         } else if (role === 'worker' && message.type === 'update') {
           addUpdate(id, message);
         } else if (role === 'worker' && message.type === 'worker-error') {
@@ -149,6 +155,7 @@ export function createRelay() {
       connected = false;
       if (coordinator?.id === id) {
         coordinator = null;
+        lastStatus = null;
         if (pending) clearTimeout(pending.timer);
         pending = null;
         for (const worker of workers.values()) worker.send({ type: 'coordinator-left' });

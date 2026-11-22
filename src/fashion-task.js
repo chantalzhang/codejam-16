@@ -9,6 +9,7 @@ export const defaults = {
   outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: 0.8, timeLimitSeconds: 120,
 };
 export const taskId = 'fashion-mnist-v1';
+export const classes = ['T-shirt', 'Trouser', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot'];
 
 const SIZE = 28;
 const PIXELS = SIZE * SIZE;
@@ -39,6 +40,17 @@ function toTensors({ pixels, labels }, indices) {
   }));
 }
 
+// A few fixed held-out images shown on screen, separate from training and from the accuracy
+// set. Tiny (3 KB), so phones can show them too.
+let displayFile;
+export async function displayExamples() {
+  const { count, pixels, labels } = await (displayFile ??= download('fashion-display.bin'));
+  return Array.from({ length: count }, (_, i) => ({
+    label: labels[i],
+    image: { width: SIZE, height: SIZE, channels: 1, pixels: pixels.subarray(i * PIXELS, (i + 1) * PIXELS) },
+  }));
+}
+
 // Workers pick a slice by join number, so small groups get different slices and a phone
 // keeps the same one across runs. Without a join number (e.g. the laptop), pick at random.
 export function sliceFor(joinNumber) {
@@ -65,7 +77,7 @@ export function createTask({ joinNumber } = {}) {
   // covers all of them without everyone downloading everything. The laptop only needs the
   // test images.
   const slice = sliceFor(joinNumber);
-  let train, test;
+  let train, test, display;
   return {
     id: taskId,
     variables: model.trainableWeights.map(weight => weight.val),
@@ -87,8 +99,17 @@ export function createTask({ joinNumber } = {}) {
       try { return { loss: (await loss.data())[0], accuracy: (await accuracy.data())[0] }; }
       finally { tf.dispose([loss, accuracy]); }
     },
+    // The model's class probabilities on the display images, for the big screen.
+    async predictDisplay() {
+      const { xs } = await (display ??= (displayFile ??= download('fashion-display.bin'))
+        .then(data => toTensors(data, Array.from({ length: data.count }, (_, i) => i))));
+      const probabilities = tf.tidy(() => tf.softmax(model.apply(xs)));
+      try { return await probabilities.array(); }
+      finally { probabilities.dispose(); }
+    },
     dispose() {
       test?.then(tf.dispose);
+      display?.then(tf.dispose);
       model.dispose();
     },
   };
