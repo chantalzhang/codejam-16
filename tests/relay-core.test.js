@@ -89,6 +89,16 @@ test('with no usable updates, the result says so instead of averaging nothing', 
   assert.equal(result.count, 0);
 });
 
+test('workers get join numbers in order; the laptop does not take one', () => {
+  const relay = createRelay();
+  const welcomes = [];
+  for (const role of ['worker', 'coordinator', 'worker', 'worker']) {
+    relay.connect(text => welcomes.push(JSON.parse(text))).receive(JSON.stringify({ type: 'join', role }));
+  }
+  const numbers = welcomes.filter(message => message.type === 'welcome').map(message => [message.role, message.joinNumber]);
+  assert.deepEqual(numbers, [['worker', 0], ['coordinator', undefined], ['worker', 1], ['worker', 2]]);
+});
+
 test('the laptop gets one message per round however many workers there are', () => {
   const names = Array.from({ length: 300 }, (_, i) => `w${i}`);
   const swarm = setup(names);

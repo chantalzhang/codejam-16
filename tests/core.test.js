@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import * as tf from '@tensorflow/tfjs';
 import { createTask } from '../src/linear-task.js';
 import * as imageTask from '../src/image-task.js';
-import { decode } from '../src/fashion-task.js';
+import { decode, sliceFor } from '../src/fashion-task.js';
 import { SharedTrainer, timingSummary } from '../src/shared-trainer.js';
 import { createOptimizer, packValues, readValues, trainLocally, unpackValues } from '../src/tensors.js';
 import { createRelay } from '../server/relay-core.js';
@@ -121,6 +121,8 @@ test('Fashion-MNIST files decode into images with valid labels', async () => {
     assert.ok(data.labels.every(label => label < 10));
   }
   assert.throws(() => decode(new Uint8Array(100)), /file size/);
+  // Workers take slices in join order; the 6th worker wraps back to slice 0.
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map(sliceFor), [0, 1, 2, 3, 4, 0, 1]);
 });
 
 test('timing summary skips warm-up and splits each round into compute, network, and coordinator time', () => {

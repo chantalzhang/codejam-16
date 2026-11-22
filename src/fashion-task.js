@@ -39,7 +39,13 @@ function toTensors({ pixels, labels }, indices) {
   }));
 }
 
-export function createTask() {
+// Workers pick a slice by join number, so small groups get different slices and a phone
+// keeps the same one across runs. Without a join number (e.g. the laptop), pick at random.
+export function sliceFor(joinNumber) {
+  return Number.isInteger(joinNumber) ? joinNumber % SLICES : Math.floor(Math.random() * SLICES);
+}
+
+export function createTask({ joinNumber } = {}) {
   const conv = (filters, seed, extra = {}) => tf.layers.conv2d({
     filters, kernelSize: 3, padding: 'same', activation: 'relu',
     kernelInitializer: tf.initializers.heNormal({ seed }), ...extra,
@@ -55,10 +61,10 @@ export function createTask() {
       tf.layers.dense({ units: CLASSES, kernelInitializer: tf.initializers.glorotUniform({ seed: 4 }) }),
     ],
   });
-  // Each worker downloads one random slice of the training images on its first step, so a
-  // crowd covers all of them without everyone downloading everything. The laptop only
-  // needs the test images.
-  const slice = Math.floor(Math.random() * SLICES);
+  // Each worker downloads one slice of the training images on its first step, so a crowd
+  // covers all of them without everyone downloading everything. The laptop only needs the
+  // test images.
+  const slice = sliceFor(joinNumber);
   let train, test;
   return {
     id: taskId,

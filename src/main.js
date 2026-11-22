@@ -162,11 +162,12 @@ async function saveRun(run) {
 
 // Workers create each task the first time the coordinator asks for it.
 const workerTasks = new Map();
+let joinNumber; // From the relay: this worker's place in join order.
 function workerTask(taskId) {
   if (!workerTasks.has(taskId)) {
     const module = tasks.find(candidate => candidate.taskId === taskId);
     if (!module) throw new Error('Unknown task. Reload this page.');
-    workerTasks.set(taskId, module.createTask());
+    workerTasks.set(taskId, module.createTask({ joinNumber }));
   }
   return workerTasks.get(taskId);
 }
@@ -258,6 +259,7 @@ async function initialize() {
   socket.addEventListener('message', event => {
     const message = JSON.parse(event.data);
     if (message.type === 'welcome') {
+      joinNumber = message.joinNumber;
       connected = true;
       $('connection').textContent = `Connected · ${deviceName()} · ${backendLabel(backend)}`;
       if (role === 'worker') {
