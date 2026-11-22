@@ -46,7 +46,7 @@ function send(message) {
   if (socket.readyState !== WebSocket.OPEN) throw new Error('Relay is disconnected. Reload to reconnect.');
   socket.send(JSON.stringify(message));
   if (message.type === 'round') {
-    workerInfo(message.to).activity = `training round ${message.round}`;
+    for (const { workerId } of message.assignments) workerInfo(workerId).activity = `training round ${message.round}`;
     showWorkers();
   }
 }

@@ -58,10 +58,16 @@ test('relay routes rounds and updates, assigns identity, and limits roles', asyn
   assert.equal(presence.workers[0].device, 'iPhone');
   assert.equal(presence.workers[0].note, 'sitting out');
 
-  coordinator.send({ type: 'round', to: welcome.id, runId: 'run', round: 1, weights: [[1]] });
+  // One round message fans out: each assigned worker gets the model plus its own slice.
+  coordinator.send({ type: 'round', runId: 'run', round: 1, weights: 'AAAA', assignments: [
+    { workerId: welcome.id, offset: 0, count: 32 },
+    { workerId: 'gone', offset: 32, count: 32 },
+  ] });
   const step = await worker.next('round');
-  assert.equal(step.runId, 'run');
-  assert.equal(step.to, undefined);
+  assert.deepEqual([step.runId, step.weights, step.offset, step.count, step.assignments], ['run', 'AAAA', 0, 32, undefined]);
+  // Assigned workers that aren't connected are reported so the laptop can drop them.
+  const gone = await coordinator.next('worker-error');
+  assert.deepEqual([gone.workerId, gone.round, gone.error], ['gone', 1, 'not connected']);
   worker.send({ type: 'update', runId: 'run', round: 1, workerId: 'spoofed', delta: [[2]] });
   const update = await coordinator.next('update');
   assert.equal(update.workerId, welcome.id);
@@ -81,8 +87,10 @@ test('relay routes rounds and updates, assigns identity, and limits roles', asyn
 
   worker.socket.close();
   assert.deepEqual((await coordinator.next('presence')).workers, []);
-  coordinator.send({ type: 'round', to: welcome.id });
-  assert.match((await coordinator.next('error')).error, /not ready/);
+  coordinator.send({ type: 'round', runId: 'run', round: 2, assignments: [{ workerId: welcome.id, offset: 0, count: 32 }] });
+  assert.equal((await coordinator.next('worker-error')).error, 'not connected');
+  coordinator.send({ type: 'round' });
+  assert.match((await coordinator.next('error')).error, /assignments/);
 
   const remainingWorker = await connect(url, 'worker');
   await remainingWorker.next('welcome');

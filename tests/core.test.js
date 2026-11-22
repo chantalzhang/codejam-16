@@ -17,11 +17,19 @@ function sameWeights(a, b) {
   a.forEach((values, tensor) => values.forEach((value, i) => closeTo(value, b[tensor][i])));
 }
 
+// The laptop sends one round message; split it per worker the way the relay does.
+function trainerWith(task, options) {
+  const send = message => {
+    for (const { workerId, offset, count } of message.assignments) options.send({ ...message, to: workerId, offset, count });
+  };
+  return new SharedTrainer(task, { ...options, send });
+}
+
 // Runs the coordinator against in-process workers that behave like the worker page.
 async function simulate(workerCount, { rounds = 40, batchSize = 17, localSteps = 1, optimizer = 'sgd', learningRate = 0.1 } = {}) {
   const task = createTask();
   const workers = Array.from({ length: workerCount }, () => ({ task: createTask() }));
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       const worker = workers[Number(message.to)];
       void (async () => {
@@ -193,7 +201,7 @@ test('three workers learn with Adam and several local steps per round', async ()
 test('the outer Nesterov step follows the same formula as ml/sim.py (PyTorch)', async () => {
   const task = createTask();
   // Every worker moves each weight by d = -0.1, so the outer gradient is g = 0.1 each round.
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
         count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
@@ -211,7 +219,7 @@ test('the outer Nesterov step follows the same formula as ml/sim.py (PyTorch)', 
 
 test('stale, duplicate, and unassigned updates cannot enter a round', async () => {
   const task = createTask();
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       const update = {
         type: 'update', runId: message.runId, workerId: message.to, round: message.round,
@@ -233,7 +241,7 @@ test('stale, duplicate, and unassigned updates cannot enter a round', async () =
 
 test('a round with no usable updates fails without changing the model', async () => {
   const task = createTask();
-  const trainer = new SharedTrainer(task, { send() {} });
+  const trainer = trainerWith(task, { send() {} });
   try {
     const run = await trainer.train({ workerIds: ['absent'], rounds: 1, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1, deadlineMs: 5 });
     assert.equal(run.outcome, 'failed');
@@ -245,7 +253,7 @@ test('a round with no usable updates fails without changing the model', async ()
 
 test('workers that miss the deadline or fail are dropped, and the run continues with the rest', async () => {
   const task = createTask();
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       const update = { type: 'update', runId: message.runId, workerId: message.to, round: message.round,
         count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 };
@@ -270,7 +278,7 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
   const task = createTask();
   let old;
   let shouldStop = true;
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       const update = { type: 'update', workerId: 'a', runId: message.runId, round: message.round,
         count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 };
@@ -293,7 +301,7 @@ test('stop invalidates in-flight work and a new run can start cleanly', async ()
 
 test('a worker that leaves mid-round is not waited for, and later rounds go on without it', async () => {
   const task = createTask();
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       if (message.to === 'leaving') return queueMicrotask(() => trainer.removeWorker('leaving', 'left'));
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
@@ -316,7 +324,7 @@ test('a worker that leaves mid-round is not waited for, and later rounds go on w
 test('a worker that joins mid-run gets the current model from the next round', async () => {
   const task = createTask();
   const firstWeights = {};
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       firstWeights[message.to] ??= unpackValues(message.weights, task.variables);
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
@@ -338,7 +346,7 @@ test('a worker that joins mid-run gets the current model from the next round', a
 
 test('with more workers than the per-round cap, workers take turns', async () => {
   const task = createTask();
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
         count: message.count, delta: packValues([[-0.1], [-0.1]]), loss: 1, computeMs: 1 });
@@ -357,7 +365,7 @@ test('with more workers than the per-round cap, workers take turns', async () =>
 
 test('the run fails once every worker has left', async () => {
   const task = createTask();
-  const trainer = new SharedTrainer(task, { send: message => queueMicrotask(() => trainer.removeWorker(message.to, 'left')) });
+  const trainer = trainerWith(task, { send: message => queueMicrotask(() => trainer.removeWorker(message.to, 'left')) });
   try {
     const run = await trainer.train({ workerIds: ['a'], rounds: 3, batchSize: 8, localSteps: 1, optimizer: 'sgd', learningRate: 0.1 });
     assert.equal(run.outcome, 'failed');
@@ -368,7 +376,7 @@ test('the run fails once every worker has left', async () => {
 
 test('a worker with a wrong example count is dropped rather than skewing the average', async () => {
   const task = createTask();
-  const trainer = new SharedTrainer(task, {
+  const trainer = trainerWith(task, {
     send(message) {
       trainer.receive({ type: 'update', runId: message.runId, workerId: message.to, round: message.round,
         count: message.count, delta: packValues([[1], [1]]), loss: 1, computeMs: 1 });
