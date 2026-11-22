@@ -1,9 +1,12 @@
-import './style.css';
+import './app.css';
 import QRCode from 'qrcode';
 import { BACKENDS, backendLabel, initializeBackend, memoryUsage, onGpuReset } from './backend.js';
 import { SharedTrainer, timingSummary } from './shared-trainer.js';
 import { createOptimizer, packValues, trainLocally, unpackValues } from './tensors.js';
 import { tasks } from './tasks.js';
+import { clock, drawLossChart, drawProbabilityHistory, drawRateSparkline } from './ui/charts.js';
+import { imageUrl } from './ui/images.js';
+import { createCard, guessChanges, resultSummary, updateCard, winner } from './ui/predictions.js';
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -19,13 +22,23 @@ const preferredBackend = BACKENDS.includes(params.get('backend')) ? params.get('
 const relayUrl = params.get('relay') ?? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/swarm`;
 const relayPage = new URL(relayUrl.replace(/^ws/, 'http'));
 $('worker-link').href = `${relayPage.origin}/`;
-$('worker-link').textContent = relayPage.host;
+$('worker-link').textContent = $('dialog-url').textContent = relayPage.host;
 if (role === 'coordinator') {
-  void QRCode.toDataURL(`${relayPage.origin}/`, { margin: 1, width: 320 }).then(url => { $('join-qr').src = url; });
+  void QRCode.toDataURL(`${relayPage.origin}/`, { margin: 1, width: 640 }).then(url => { $('join-qr').src = $('dialog-qr').src = url; });
 }
-$('role-title').textContent = role === 'coordinator' ? 'Shared training · laptop' : 'Shared training · worker';
+document.body.classList.toggle('phone-view', role === 'worker');
 $(role).hidden = false;
+// The phone and laptop pages each have their own connection line.
+const connectionId = role === 'worker' ? 'worker-connection' : 'connection';
 for (const { taskId, name } of tasks) $('task').add(new Option(name, taskId));
+// Dev controls are behind the Dev button, or open from the start with ?dev.
+function showDev(open) {
+  $('dev-panel').hidden = !open;
+  $('dev-toggle').setAttribute('aria-expanded', open);
+}
+showDev(params.has('dev'));
+$('dev-toggle').addEventListener('click', () => showDev($('dev-panel').hidden));
+$('enlarge-qr').addEventListener('click', () => $('join-dialog').showModal());
 
 let selected = tasks[0];
 let task, trainer, socket, backend;
@@ -60,6 +73,11 @@ function send(message) {
 
 // ---- Coordinator (laptop) ----
 
+// Big-screen state for the current run. display holds the task's fixed held-out images and
+// the model's probabilities on them at each evaluation, starting with the untrained model.
+let screen = { points: [], display: null };
+let roomState = 'waiting';
+
 function status(message) { $('status').textContent = message; }
 const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
 function refreshControls() {
@@ -68,7 +86,90 @@ function refreshControls() {
   for (const id of ['task', 'rounds', 'batch-size', 'local-steps', 'target', 'time-limit']) $(id).disabled = running;
 }
 const TIMING_IDS = { roundMs: 'round-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
+const readyPhones = () => workers.filter(canRun).length;
+const correctCount = evaluation => evaluation.filter((probabilities, i) => winner(probabilities) === screen.display.examples[i].label).length;
+
+function showRoom() {
+  const phones = readyPhones();
+  $('header-workers').textContent = $('room-workers').textContent = phones;
+  $('premise-text').textContent = `phone${phones === 1 ? '' : 's'} ${roomState === 'training' ? 'training one shared model' : 'ready'}`;
+  $('room-status').textContent = { waiting: phones ? 'Ready' : 'Waiting for phones', training: 'Training', done: 'Done' }[roomState];
+  scheduleStatus();
+}
+
+function showScreen({ done = false } = {}) {
+  const latest = screen.points.at(-1);
+  $('room-loss').textContent = latest ? latest.loss.toFixed(3) : '—';
+  $('room-accuracy').textContent = latest?.accuracy === undefined ? '—' : `${(latest.accuracy * 100).toFixed(1)}%`;
+  $('room-elapsed').textContent = latest ? clock(latest.seconds) : '—';
+  $('room-step').textContent = latest ? latest.round : '—';
+  $('comparison-time').textContent = latest ? `round ${latest.round} · t=${latest.seconds.toFixed(1)}s` : '';
+  const display = screen.display;
+  const lossHeight = drawLossChart($('loss-chart'), screen.points, display?.examples.length);
+  $('coordinator').classList.toggle('run-complete', done);
+  if (!display?.history.length) return;
+  const { examples, history, classes } = display;
+  const total = examples.length;
+  const correct = correctCount(history.at(-1));
+  [...$('predictions').children].forEach((card, image) =>
+    updateCard(card, history.at(-1)[image], guessChanges(history, image), classes, { done }));
+  $('predictions-panel').classList.toggle('has-errors', correct < total);
+  $('correct-count').textContent = `${correct} / ${total} correct`;
+  if (done) $('prediction-title').replaceChildren(resultSummary(correctCount(history[0]), correct, total));
+  $('evaluation-count').textContent = `${history.length} evals`;
+  drawProbabilityHistory($('probability-chart'), history, examples.map(example => example.label), classes, lossHeight);
+}
+
+// Shows the task's fixed held-out images with the (untrained) model's guesses, or hides the
+// prediction panels for tasks without images.
+async function resetScreen() {
+  screen = { points: [], display: null };
+  $('room-task').textContent = selected.classes ? `${selected.name} · ${selected.classes.length} classes` : selected.name;
+  $('prediction-title').replaceChildren('Test predictions ', Object.assign(document.createElement('span'), {
+    className: 'prediction-note', textContent: 'Fixed held-out images · class probabilities',
+  }));
+  $('loss-note').textContent = selected.displayExamples ? '+ accuracy' : 'held-out test set';
+  const current = task;
+  const examples = await selected.displayExamples?.();
+  const initial = await task.predictDisplay?.();
+  if (task !== current) return;
+  if (examples && initial) {
+    screen.display = { examples, classes: selected.classes, history: [initial] };
+    $('predictions').replaceChildren(...examples.map(example => createCard({ ...example, url: imageUrl(example.image) }, selected.classes)));
+  }
+  $('predictions-panel').hidden = $('probability-panel').hidden = !screen.display;
+  showScreen();
+  scheduleStatus();
+}
+
+// Phones show the room's state and the shared model's guesses. Sent at most twice a second,
+// since a wave of joins would otherwise send one per join to every phone.
+let statusTimer, runResult;
+function scheduleStatus() {
+  statusTimer ??= setTimeout(() => {
+    statusTimer = undefined;
+    if (socket?.readyState !== WebSocket.OPEN) return;
+    const history = screen.display?.history;
+    send({
+      type: 'status', state: roomState, phones: readyPhones(), taskId: selected.taskId, result: runResult,
+      display: history?.at(-1).map((probabilities, image) => ({
+        probabilities: probabilities.map(value => Math.round(value * 1000) / 1000),
+        guesses: guessChanges(history, image),
+      })),
+    });
+  }, 500);
+}
+
 function showProgress(point, history) {
+  screen.points.push({ round: point.round, seconds: point.elapsedMs / 1000, loss: point.loss, accuracy: point.accuracy });
+  if (screen.display && point.display) {
+    // Round 0 is the untrained model, which replaces the preview shown before the run.
+    if (point.round === 0) screen.display.history = [];
+    screen.display.history.push(point.display);
+    screen.points.at(-1).shown = correctCount(point.display);
+  }
+  showScreen();
+  scheduleStatus();
   $('round').textContent = `${point.round} / ${trainer.active.rounds}`;
   $('loss').textContent = point.loss.toPrecision(4);
   $('accuracy').textContent = point.accuracy === undefined ? '—' : `${(point.accuracy * 100).toFixed(1)}%`;
@@ -92,6 +193,7 @@ function resetModel() {
   task = selected.createTask();
   trainer = new SharedTrainer(task, { send, onProgress: showProgress });
   for (const id of ['round', 'loss', 'accuracy', 'elapsed', ...Object.values(TIMING_IDS)]) $(id).textContent = '—';
+  return resetScreen();
 }
 
 // What the laptop knows about each worker, kept after it leaves so failures stay visible.
@@ -139,7 +241,14 @@ function card(id, info) {
   return element;
 }
 function showWorkers() {
-  for (const worker of workers) Object.assign(workerInfo(worker.id), { device: worker.device, backend: worker.backend });
+  for (const worker of workers) {
+    const info = workerInfo(worker.id);
+    if (canRun(worker) && !info.announced) {
+      info.announced = true;
+      $('latest-join').textContent = `Phone ${String(info.number).padStart(2, '0')} joined`;
+    }
+    Object.assign(info, { device: worker.device, backend: worker.backend });
+  }
   $('worker-count').textContent = workers.length;
   $('workers').replaceChildren(...[...infos].map(([id, info]) => card(id, info)));
   if (!infos.size) $('workers').textContent = 'No workers yet. Open a worker tab or the phone link.';
@@ -149,6 +258,7 @@ function showWorkers() {
   }
   for (const worker of workers.filter(canRun)) trainer?.addWorker(worker.id);
   refreshControls();
+  showRoom();
 }
 function snapshot(id) {
   const { number, device, backend, examples, computeMs, memory, error } = workerInfo(id);
@@ -169,9 +279,58 @@ async function saveRun(run) {
 
 // ---- Worker (phone) ----
 
+function phoneState(label, { inactive = false } = {}) {
+  $('worker-state').textContent = label;
+  $('worker').classList.toggle('worker-inactive', inactive);
+}
+
+// The laptop's status: room state, phone count, and the model's guess on one shown image
+// (picked by join order, so neighbors see different ones).
+let phoneExample;
+async function showStatus({ state, phones, taskId, result, display }) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || sittingOut) return;
+  phoneState({ waiting: 'Waiting', training: 'Training', done: 'Done' }[state], { inactive: state !== 'training' });
+  $('phone-team').hidden = false;
+  $('phone-workers').textContent = phones;
+  $('phone-team-text').textContent = `phone${phones === 1 ? '' : 's'} · one shared model`;
+  $('phone-summary').hidden = state !== 'done' || !result;
+  $('phone-summary').textContent = result ?? '';
+  if (state === 'training') $('worker-status').textContent = 'Keep this page open and your screen on.';
+  else if (state === 'waiting') $('worker-status').textContent = 'Waiting for the laptop to start a run.';
+  const module = tasks.find(candidate => candidate.taskId === taskId);
+  if (!display || !module?.displayExamples) {
+    $('phone-prediction').hidden = true;
+    return;
+  }
+  const index = joinNumber % display.length;
+  if (phoneExample?.taskId !== taskId) {
+    const example = (await module.displayExamples())[index];
+    phoneExample = { taskId, label: example.label };
+    $('phone-image').src = imageUrl(example.image);
+    $('phone-image').alt = `Held-out test image: ${module.classes[example.label]}`;
+    $('phone-actual').textContent = `Actual: ${module.classes[example.label]}`;
+    $('phone-prediction').dataset.label = example.label;
+  }
+  updateCard($('phone-prediction'), display[index].probabilities, display[index].guesses, module.classes, { done: state === 'done' });
+  $('phone-prediction').hidden = false;
+}
+
+// This phone's measured speed: examples per second of GPU compute, each round.
+const rateSamples = [];
+function showRate(examples, computeMs) {
+  const seconds = performance.now() / 1000;
+  const rate = examples / (computeMs / 1000);
+  rateSamples.push({ seconds, rate });
+  while (rateSamples[0].seconds < seconds - 30) rateSamples.shift();
+  $('phone-rate').hidden = false;
+  $('phone-rate-value').textContent = `${Math.round(rate).toLocaleString('en-US')} examples/s`;
+  drawRateSparkline($('phone-rate-chart'), rateSamples, seconds);
+}
+
 // Workers create each task the first time the coordinator asks for it.
 const workerTasks = new Map();
 let joinNumber; // From the relay: this worker's place in join order.
+let sittingOut = false;
 function workerTask(taskId) {
   if (!workerTasks.has(taskId)) {
     const module = tasks.find(candidate => candidate.taskId === taskId);
@@ -193,24 +352,24 @@ async function work(message) {
     workerRun?.optimizer.dispose();
     workerRun = { id: message.runId, optimizer: createOptimizer(message.optimizer, message.learningRate), examples: 0 };
   }
-  $('worker-status').textContent = `Round ${round}: training ${localSteps} step${localSteps > 1 ? 's' : ''}…`;
   const weights = unpackValues(message.weights, task.variables);
   const result = await trainLocally(task, workerRun.optimizer, weights, message);
   const memory = memoryUsage();
   workerRun.examples += count * localSteps;
-  $('examples').textContent = workerRun.examples;
+  $('examples').textContent = workerRun.examples.toLocaleString('en-US');
+  showRate(count * localSteps, result.computeMs);
   $('compute').textContent = formatMs(result.computeMs);
   $('gpu-memory').textContent = formatBytes(memory.gpuBytes);
   $('tensors').textContent = memory.tensors;
   send({ type: 'update', runId: message.runId, round, count: count * localSteps, memory, ...result, delta: packValues(result.delta) });
   currentRound = undefined;
-  $('worker-status').textContent = `Round ${round} sent. Waiting for the next one.`;
 }
 
 // Tell the laptop, then leave: after a GPU reset this page can't compute anymore.
 function handleGpuReset() {
   const error = 'GPU reset (WebGL context lost). Reload this page to rejoin.';
   $(role === 'worker' ? 'worker-status' : 'status').textContent = error;
+  if (role === 'worker') phoneState('Stopped', { inactive: true });
   if (socket.readyState === WebSocket.OPEN) {
     send({ type: 'worker-error', runId: currentRound?.runId, round: currentRound?.round, error });
   }
@@ -260,7 +419,7 @@ async function initialize() {
   }
   if (role === 'coordinator') {
     showTask();
-    resetModel();
+    void resetModel();
   }
   socket = new WebSocket(relayUrl);
   socket.addEventListener('open', () => send({ type: 'join', role }));
@@ -270,9 +429,11 @@ async function initialize() {
     if (message.type === 'welcome') {
       joinNumber = message.joinNumber;
       connected = true;
-      $('connection').textContent = `Connected · ${deviceName()} · ${backendLabel(backend)}`;
+      $(connectionId).textContent = `Connected · ${deviceName()} · ${backendLabel(backend)}`;
       if (role === 'worker') {
         const note = sitOutReason();
+        sittingOut = Boolean(note);
+        phoneState(note ? 'Sitting out' : 'Waiting', { inactive: true });
         // A worker that sits out offers no tasks, so the laptop never gives it work.
         send({ type: 'ready', backend, device: deviceName(), note, tasks: note ? [] : tasks.map(({ taskId }) => taskId) });
         if (note) {
@@ -281,6 +442,7 @@ async function initialize() {
         }
       }
       refreshControls();
+      if (role === 'coordinator') scheduleStatus();
     } else if (message.type === 'presence') {
       workers = message.workers;
       showWorkers();
@@ -292,11 +454,14 @@ async function initialize() {
           send({ type: 'worker-error', runId: message.runId, round: message.round, error: error.message });
         }
       });
+    } else if (role === 'worker' && message.type === 'status') {
+      void showStatus(message);
     } else if (message.type === 'coordinator-left') {
+      if (!sittingOut) phoneState('Waiting', { inactive: true });
       $('worker-status').textContent = 'Laptop disconnected. Waiting for it to come back.';
     } else if (message.type === 'error') {
       trainer?.stop(message.error);
-      $('connection').textContent = `Relay error: ${message.error}`;
+      $(connectionId).textContent = `Relay error: ${message.error}`;
     } else {
       receive(message);
     }
@@ -304,11 +469,15 @@ async function initialize() {
   socket.addEventListener('close', () => {
     connected = false;
     trainer?.stop('Relay disconnected.');
-    $('connection').textContent = 'Disconnected. Reload this page to reconnect.';
+    $(connectionId).textContent = 'Disconnected. Reload this page to reconnect.';
+    if (role === 'worker') {
+      phoneState('Disconnected', { inactive: true });
+      $('disconnect').disabled = true;
+    }
     refreshControls();
   });
   socket.addEventListener('error', () => {
-    $('connection').textContent = 'Connection failed. Is npm start running?';
+    $(connectionId).textContent = 'Connection failed. Is npm start running?';
   });
   if (role === 'coordinator') showWorkers();
 }
@@ -338,9 +507,11 @@ $('start').addEventListener('click', async () => {
   }
   const participants = workers.filter(canRun);
   running = true;
-  resetModel();
+  roomState = 'training';
+  runResult = undefined;
+  await resetModel();
   $('saved').textContent = '';
-  $('result').hidden = true;
+  $('result').hidden = $('run-result').hidden = true;
   showWorkers();
   status(`Training one shared model with ${participants.length} worker(s)…`);
   try {
@@ -360,7 +531,14 @@ $('start').addEventListener('click', async () => {
         ? `Reached ${accuracyText}% accuracy in ${seconds} s with ${phones}`
         : `Time's up: ${accuracyText}% accuracy after ${seconds} s with ${phones}`;
       $('result').hidden = false;
+      runResult = run.reachedTarget
+        ? `Reached ${accuracyText}% held-out accuracy in ${seconds} s with ${phones}`
+        : `Time's up: ${accuracyText}% held-out accuracy after ${seconds} s with ${phones}`;
+      $('run-result').textContent = runResult;
+      $('run-result').hidden = false;
     }
+    roomState = 'done';
+    showScreen({ done: true });
     await saveRun({
       ...run, timing: timingSummary(run.history), workers: run.participants.map(snapshot),
       coordinatorBackend: backend, userAgent: navigator.userAgent,
@@ -369,17 +547,26 @@ $('start').addEventListener('click', async () => {
     status(`Cannot start: ${error.message}`);
   } finally {
     running = false;
+    if (roomState === 'training') roomState = 'waiting';
     refreshControls();
+    showRoom();
   }
 });
 $('task').addEventListener('change', () => {
   selected = tasks.find(({ taskId }) => taskId === $('task').value);
+  roomState = 'waiting';
+  $('run-result').hidden = true;
   showTask();
-  resetModel();
+  void resetModel();
   showWorkers();
   status(`Selected: ${selected.name}.`);
 });
 $('stop').addEventListener('click', () => trainer.stop());
+$('disconnect').addEventListener('click', () => {
+  $('worker-status').textContent = 'Disconnected. Reload this page to rejoin.';
+  socket?.close();
+});
+addEventListener('resize', () => { if (role === 'coordinator') showScreen({ done: roomState === 'done' }); });
 void initialize().catch(error => {
-  $('connection').textContent = `Initialization failed: ${error.message}`;
+  $(connectionId).textContent = `Initialization failed: ${error.message}`;
 });
