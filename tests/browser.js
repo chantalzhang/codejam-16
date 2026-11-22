@@ -159,6 +159,13 @@ try {
   assert.match(await page.locator('#result').textContent(), /^Reached \d+\.\d% accuracy in \d+\.\d s with 2 phones$/);
   await page.locator('#target').fill('');
 
+  // Without a target, the time limit ends the run.
+  await page.locator('#time-limit').fill('2');
+  const timed = await run(1000, 8, 2);
+  assert.ok(timed.timeUp && timed.history.length < 1001);
+  assert.match(await page.locator('#result').textContent(), /^Time's up: \d+\.\d% accuracy after \d+\.\d s with 2 phones$/);
+  await page.locator('#time-limit').fill('');
+
   // Simulate a phone GPU reset mid-run: that worker drops out and the run keeps going.
   await page.locator('#task').selectOption('linear-function-v1');
   await page.locator('#rounds').fill('10000');

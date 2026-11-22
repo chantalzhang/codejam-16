@@ -58,7 +58,7 @@ const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
 function refreshControls() {
   $('start').disabled = !connected || running || !workers.some(canRun);
   $('stop').disabled = !running;
-  for (const id of ['task', 'rounds', 'batch-size', 'local-steps', 'target']) $(id).disabled = running;
+  for (const id of ['task', 'rounds', 'batch-size', 'local-steps', 'target', 'time-limit']) $(id).disabled = running;
 }
 const TIMING_IDS = { roundMs: 'round-time', computeMs: 'compute-time', networkMs: 'network-time', coordinatorMs: 'coordinator-time' };
 function showProgress(point, history) {
@@ -76,6 +76,7 @@ function showTask() {
   $('task-note').textContent = selected.description;
   $('rounds').value = selected.defaults.rounds;
   $('target').value = selected.defaults.targetAccuracy ? Math.round(selected.defaults.targetAccuracy * 100) : '';
+  $('time-limit').value = selected.defaults.timeLimitSeconds ?? '';
   $('batch-size').value = selected.defaults.batchSize;
   $('local-steps').value = selected.defaults.localSteps;
 }
@@ -318,6 +319,11 @@ $('start').addEventListener('click', async () => {
     status('Stop at accuracy must be between 1 and 100, or empty.');
     return;
   }
+  const timeLimitMs = $('time-limit').value === '' ? null : Number($('time-limit').value) * 1000;
+  if (timeLimitMs !== null && !(timeLimitMs > 0)) {
+    status('Stop after must be a positive number of seconds, or empty.');
+    return;
+  }
   // Fresh run: forget workers that left and clear last run's numbers.
   for (const [id, info] of infos) {
     if (!workers.some(worker => worker.id === id)) infos.delete(id);
@@ -335,14 +341,17 @@ $('start').addEventListener('click', async () => {
       workerIds: participants.map(worker => worker.id), rounds, batchSize, localSteps,
       optimizer: selected.defaults.optimizer, learningRate: selected.defaults.learningRate,
       outerLearningRate: selected.defaults.outerLearningRate, outerMomentum: selected.defaults.outerMomentum,
-      targetAccuracy: target,
+      targetAccuracy: target, timeLimitMs,
     });
     const outcome = { completed: 'Completed', stopped: 'Stopped', failed: 'Failed' }[run.outcome];
     status(`${outcome}: ${run.history.at(-1)?.round ?? 0} of ${rounds} rounds.${run.reason ? ' ' + run.reason : ''}`);
-    if (run.reachedTarget) {
-      const { accuracy, elapsedMs, workers: count } = run.reachedTarget;
-      $('result').textContent = `Reached ${(accuracy * 100).toFixed(1)}% accuracy in ${(elapsedMs / 1000).toFixed(1)} s ` +
-        `with ${count} phone${count === 1 ? '' : 's'}`;
+    const ending = run.reachedTarget ?? run.timeUp;
+    if (ending) {
+      const { accuracy, elapsedMs, workers: count } = ending;
+      const [accuracyText, seconds, phones] = [(accuracy * 100).toFixed(1), (elapsedMs / 1000).toFixed(1), `${count} phone${count === 1 ? '' : 's'}`];
+      $('result').textContent = run.reachedTarget
+        ? `Reached ${accuracyText}% accuracy in ${seconds} s with ${phones}`
+        : `Time's up: ${accuracyText}% accuracy after ${seconds} s with ${phones}`;
       $('result').hidden = false;
     }
     await saveRun({

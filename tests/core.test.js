@@ -246,6 +246,16 @@ test('a run stops as soon as it reaches the target accuracy, and says when', asy
   } finally { task.dispose(); }
 });
 
+test('a run stops once its time limit has passed', async () => {
+  const task = createTask();
+  try {
+    const run = await swarm(task, { a: steady() }).train({ rounds: 100_000, timeLimitMs: 20 });
+    assert.equal(run.outcome, 'completed', run.reason);
+    assert.ok(run.timeUp && run.timeUp.elapsedMs >= 20 && run.history.length < 100_001);
+    assert.equal(run.reachedTarget, undefined);
+  } finally { task.dispose(); }
+});
+
 test('a round with no usable updates fails without changing the model', async () => {
   const task = createTask();
   try {

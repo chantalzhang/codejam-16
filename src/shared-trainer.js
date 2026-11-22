@@ -95,6 +95,7 @@ export class SharedTrainer {
     workerIds, rounds, batchSize, localSteps, optimizer, learningRate,
     outerLearningRate = 1, outerMomentum = 0, deadlineMs = 10_000, maxWorkersPerRound = 500,
     targetAccuracy = null, // Stop as soon as test accuracy reaches this (0–1).
+    timeLimitMs = null, // Stop after the round that passes this much time since Start.
   }) {
     if (this.active) throw new Error('A run is already active.');
     if (!workerIds.length || new Set(workerIds).size !== workerIds.length ||
@@ -103,11 +104,12 @@ export class SharedTrainer {
         !(outerMomentum >= 0 && outerMomentum < 1) ||
         !Number.isFinite(deadlineMs) || deadlineMs <= 0 ||
         !(Number.isInteger(maxWorkersPerRound) && maxWorkersPerRound > 0) ||
-        !(targetAccuracy === null || (targetAccuracy > 0 && targetAccuracy <= 1))) throw new Error('Invalid training settings.');
+        !(targetAccuracy === null || (targetAccuracy > 0 && targetAccuracy <= 1)) ||
+        !(timeLimitMs === null || timeLimitMs > 0)) throw new Error('Invalid training settings.');
     const run = {
       id: crypto.randomUUID(), taskId: this.task.id, workerIds: [...workerIds], participants: [...workerIds],
       rounds, batchSize, localSteps,
-      optimizer, learningRate, outerLearningRate, outerMomentum, targetAccuracy,
+      optimizer, learningRate, outerLearningRate, outerMomentum, targetAccuracy, timeLimitMs,
       startedAt: new Date().toISOString(), history: [], outcome: 'running',
     };
     this.active = run;
@@ -157,9 +159,14 @@ export class SharedTrainer {
         const point = await record(round, updates.map(({ workerId, count, loss, computeMs }) => ({
           workerId, count, loss, computeMs,
         })), waitMs, dropped);
+        // Times count from Start, which is what the audience sees.
+        const result = { round, elapsedMs: point.elapsedMs, accuracy: point.accuracy, workers: run.participants.length };
         if (targetAccuracy !== null && point.accuracy >= targetAccuracy) {
-          // Counted from Start, which is what the audience sees.
-          run.reachedTarget = { round, elapsedMs: point.elapsedMs, accuracy: point.accuracy, workers: run.participants.length };
+          run.reachedTarget = result;
+          break;
+        }
+        if (timeLimitMs !== null && point.elapsedMs >= timeLimitMs) {
+          run.timeUp = result;
           break;
         }
       }

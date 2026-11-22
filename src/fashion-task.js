@@ -5,8 +5,8 @@ export const name = 'Fashion-MNIST (stand-in)';
 export const description = 'Stand-in task: a small CNN learns 10 kinds of clothing from 28×28 Fashion-MNIST images.';
 // From ml/sim.py: Adam needs far fewer steps than SGD, and syncing every 10 steps was fastest.
 export const defaults = {
-  rounds: 100, batchSize: 32, localSteps: 10, optimizer: 'adam', learningRate: 0.01,
-  outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: 0.8,
+  rounds: 1000, batchSize: 32, localSteps: 10, optimizer: 'adam', learningRate: 0.01,
+  outerLearningRate: 0.5, outerMomentum: 0.9, targetAccuracy: 0.8, timeLimitSeconds: 120,
 };
 export const taskId = 'fashion-mnist-v1';
 
