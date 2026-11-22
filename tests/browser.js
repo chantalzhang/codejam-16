@@ -174,6 +174,16 @@ try {
   await page.waitForFunction(() => /GPU reset/.test(document.querySelector('#workers .card.left .state')?.textContent));
   await readyWorkers(1);
 
+  // A phone without WebGPU sits out instead of risking a freeze.
+  const oldPhone = await browser.newPage({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15' });
+  await oldPhone.addInitScript(() => Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined }));
+  await oldPhone.goto(`${base}?role=worker`);
+  await oldPhone.waitForFunction(() => /sitting out/.test(document.querySelector('#worker-status').textContent));
+  await page.waitForFunction(() => [...document.querySelectorAll('#workers .card')]
+    .some(card => /iPhone/.test(card.textContent) && /sitting out: no WebGPU/.test(card.textContent)));
+  await oldPhone.close();
+  await readyWorkers(1);
+
   // A WebGPU worker (what iPhones use) trains alongside a WebGL one.
   const gpuWorker = await addWorker('webgpu');
   assert.match(await gpuWorker.locator('#connection').textContent(), /WebGPU$/);

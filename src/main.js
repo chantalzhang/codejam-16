@@ -24,8 +24,17 @@ const formatMs = ms => `${Math.round(ms)} ms`;
 const formatBytes = bytes => bytes < 2 ** 20 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 2 ** 20).toFixed(1)} MB`;
 
 function deviceName() {
+  // iPads report themselves as Macs; the touchscreen gives them away.
+  if (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1) return 'iPad';
   const names = [['iPhone', /iPhone/], ['iPad', /iPad/], ['Android', /Android/], ['Mac', /Macintosh/], ['Windows', /Windows/], ['Linux', /Linux/]];
   return names.find(([, pattern]) => pattern.test(navigator.userAgent))?.[0] ?? 'Browser';
+}
+
+// Phones without WebGPU sit out: WebGL froze iPhones mid-training, and CPU is far too slow.
+// Laptops are fine on WebGL. Forcing a backend in the link (?backend=) skips this check.
+function sitOutReason() {
+  if (backend === 'webgpu' || params.has('backend') || !['iPhone', 'iPad', 'Android'].includes(deviceName())) return null;
+  return 'sitting out: no WebGPU in this browser';
 }
 
 function send(message) {
@@ -81,6 +90,7 @@ function workerState(info, worker) {
   if (!worker) return ['left', info.error ? `left · ${info.error}` : 'left'];
   if (info.error) return ['failed', info.error];
   if (!worker.ready) return ['busy', 'joining…'];
+  if (worker.note) return ['failed', worker.note];
   if (!canRun(worker)) return ['failed', 'different task version: reload this worker'];
   if (info.activity) return [info.activity.startsWith('computing') ? 'busy' : 'ready', info.activity];
   return ['ready', 'ready'];
@@ -245,7 +255,13 @@ async function initialize() {
       connected = true;
       $('connection').textContent = `Connected · ${deviceName()} · ${backendLabel(backend)}`;
       if (role === 'worker') {
-        send({ type: 'ready', backend, device: deviceName(), tasks: tasks.map(({ taskId }) => taskId) });
+        const note = sitOutReason();
+        // A worker that sits out offers no tasks, so the laptop never gives it work.
+        send({ type: 'ready', backend, device: deviceName(), note, tasks: note ? [] : tasks.map(({ taskId }) => taskId) });
+        if (note) {
+          $('worker-status').textContent = "This browser doesn't support WebGPU, so this phone is sitting out " +
+            '(older GPU paths freeze during training). Updating iOS or using a newer browser should fix it.';
+        }
       }
       refreshControls();
     } else if (message.type === 'presence') {

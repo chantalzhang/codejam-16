@@ -49,13 +49,14 @@ test('relay routes rounds and updates, assigns identity, and limits roles', asyn
   const worker = await connect(url, 'worker');
   const welcome = await worker.next('welcome');
   await coordinator.next('presence');
-  worker.send({ type: 'ready', backend: 'webgl', device: 'iPhone', tasks: ['fixture'] });
+  worker.send({ type: 'ready', backend: 'webgl', device: 'iPhone', note: 'sitting out', tasks: ['fixture'] });
   const presence = await coordinator.next('presence');
   assert.equal(presence.workers[0].id, welcome.id);
   assert.equal(presence.workers[0].ready, true);
   assert.equal(presence.workers[0].backend, 'webgl');
   assert.deepEqual(presence.workers[0].tasks, ['fixture']);
   assert.equal(presence.workers[0].device, 'iPhone');
+  assert.equal(presence.workers[0].note, 'sitting out');
 
   coordinator.send({ type: 'round', to: welcome.id, runId: 'run', round: 1, weights: [[1]] });
   const step = await worker.next('round');
