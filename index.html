@@ -35,7 +35,7 @@
           </div>
 
           <aside class="run-info">
-            <div class="worker-count"><span>Phones online</span><strong id="room-workers">0</strong><span id="latest-join" class="latest-join"></span></div>
+            <div class="worker-count"><span>Phones online</span><strong id="room-workers">0</strong><span id="latest-join" class="latest-join"></span><span id="cant-join" class="cant-join"></span></div>
             <!-- One square per phone; it flashes when that phone's update lands in a round. -->
             <div class="phone-grid" id="phone-grid" aria-hidden="true"></div>
             <div class="room-speed"><span>Room speed</span><strong id="room-speed">—</strong><span id="room-total" class="latest-join">examples per second, all phones together</span></div>
@@ -117,6 +117,8 @@
           <p class="phase-detail" id="phone-detail"></p>
         </section>
         <p class="phone-summary" id="phone-summary" hidden></p>
+        <!-- Shown instead of training when this browser can't train. -->
+        <section class="sit-out" id="sit-out" hidden><p id="sit-out-text"></p><button class="copy-link">Copy link</button></section>
 
         <section class="phone-prediction prediction-sample" id="phone-prediction" aria-label="Shared model prediction on a fixed test image" hidden>
           <div class="phone-model-heading"><h2>Shared model’s guess</h2><span class="prediction-actual" id="phone-actual"></span></div>

@@ -72,6 +72,18 @@ function sitOutReason() {
   return 'sitting out: no WebGPU in this browser';
 }
 
+// What to tell someone whose browser can't train. Apps' built-in browsers (e.g. after
+// scanning the QR code inside Instagram) usually lack WebGPU, so point to the real browser.
+function sitOutAdvice() {
+  const app = [['Instagram', /Instagram/], ['Facebook', /FBAN|FBAV/], ['Snapchat', /Snapchat/], ['TikTok', /musical_ly|BytedanceWebview/],
+    ['LinkedIn', /LinkedInApp/], ['Discord', /Discord/]].find(([, pattern]) => pattern.test(navigator.userAgent))?.[0];
+  const browser = deviceName() === 'Android' ? 'Chrome' : 'Safari';
+  if (app) return `You're in the ${app} browser, which can't train. Copy the link and open it in ${browser} to join.`;
+  return deviceName() === 'Android'
+    ? "This browser can't train. Open the link in Chrome to join."
+    : "This browser can't train. Open the link in Safari to join (needs iOS 26 or newer).";
+}
+
 function send(message) {
   if (socket.readyState !== WebSocket.OPEN) throw new Error('Relay is disconnected. Reload to reconnect.');
   socket.send(JSON.stringify(message));
@@ -145,6 +157,9 @@ function flashGrid({ round, updates }) {
 
 function showRoom() {
   const phones = readyPhones();
+  // Phones that joined but can't train (no WebGPU, or an outdated page).
+  const cantJoin = workers.filter(worker => worker.ready && !canRun(worker)).length;
+  $('cant-join').textContent = cantJoin ? `${cantJoin} more can't join (browser)` : '';
   if (String(phones) !== $('room-workers').textContent) bump($('room-workers'));
   $('header-workers').textContent = $('room-workers').textContent = phones;
   $('premise-text').textContent = `phone${phones === 1 ? '' : 's'} ${roomState === 'training' ? 'training one shared model' : 'ready'}`;
@@ -533,9 +548,11 @@ function connect() {
         $('worker').querySelector('[data-phase=train]').textContent = `Training on ${backend === 'cpu' ? 'CPU' : 'GPU'}`;
         // A worker that sits out offers no tasks, so the laptop never gives it work.
         send({ type: 'ready', backend, device: deviceName(), note, tasks: note ? [] : tasks.map(({ taskId }) => taskId) });
+        $('sit-out').hidden = !note;
+        $('worker').classList.toggle('sitting-out', Boolean(note));
         if (note) {
-          $('worker-status').textContent = "This browser doesn't support WebGPU, so this phone is sitting out " +
-            '(older GPU paths freeze during training). Updating iOS or using a newer browser should fix it.';
+          $('sit-out-text').textContent = sitOutAdvice();
+          $('worker-status').textContent = 'Sitting out: this browser has no WebGPU.';
         }
       }
       refreshControls();
