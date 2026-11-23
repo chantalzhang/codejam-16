@@ -220,6 +220,28 @@ try {
   await page.locator('#stop').click();
   const reconnected = await savedRun();
   assert.ok(reconnected.history.slice(-3).every(point => point.updates.length === 2), 'The reconnected phone trains again');
+
+  // A phone whose page goes to the background is skipped right away, and rejoins the same run
+  // when it comes back.
+  const setHidden = hidden => flaky.evaluate(value => {
+    Object.defineProperty(document, 'hidden', { value, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+  await page.locator('#start').click();
+  await page.waitForFunction(() => parseInt(document.querySelector('#round').textContent) >= 2);
+  await setHidden(true);
+  await page.waitForFunction(() => [...document.querySelectorAll('#workers .card')].some(card => /page in the background/.test(card.textContent)));
+  const roundWhileHidden = await roundNow();
+  await page.waitForFunction(start => parseInt(document.querySelector('#round').textContent) >= start + 3, roundWhileHidden);
+  await setHidden(false);
+  const roundShown = await roundNow();
+  await page.waitForFunction(start => parseInt(document.querySelector('#round').textContent) >= start + 4, roundShown);
+  await page.locator('#stop').click();
+  const hiddenRun = await savedRun();
+  const counts = hiddenRun.history.slice(1).map(point => point.updates.length);
+  assert.ok(counts.includes(1), 'Rounds went on without the hidden phone');
+  assert.equal(counts.at(-1), 2, 'The phone rejoined the same run');
+  assert.ok(hiddenRun.history.every(point => point.waitMs < 5_000), 'No round waited for the hidden phone');
   await flaky.close();
   await readyWorkers(1);
 
@@ -275,7 +297,7 @@ try {
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
     screenshot: join(process.env.RUNS_DIR, 'laptop.png'),
-    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, reconnect, laptop takeover, and image tasks passed.',
+    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, reconnect, hidden phones, laptop takeover, and image tasks passed.',
   }, null, 2));
 } finally {
   await browser?.close();

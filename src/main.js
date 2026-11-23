@@ -104,7 +104,7 @@ let screen = { points: [], display: null, speed: null, total: 0 };
 let roomState = 'waiting';
 
 function status(message) { $('status').textContent = message; }
-const canRun = worker => worker.ready && worker.tasks.includes(selected.taskId);
+const canRun = worker => worker.ready && !worker.away && worker.tasks.includes(selected.taskId);
 function refreshControls() {
   const running = roomState === 'training';
   $('start').disabled = !connected || running || !workers.some(canRun);
@@ -300,6 +300,7 @@ function workerState(info, worker) {
   if (!worker) return ['left', info.error ? `left · ${info.error}` : 'left'];
   if (info.error) return ['failed', info.error];
   if (!worker.ready) return ['busy', 'joining…'];
+  if (worker.away) return ['busy', 'page in the background'];
   if (worker.note) return ['failed', worker.note];
   if (!canRun(worker)) return ['failed', 'different task version: reload this worker'];
   return ['ready', info.activity ?? 'ready'];
@@ -345,9 +346,10 @@ function showWorkers() {
   $('worker-count').textContent = workers.length;
   $('workers').replaceChildren(...[...infos].map(([id, info]) => card(id, info)));
   if (!infos.size) $('workers').textContent = 'No workers yet. Open a worker tab or the phone link.';
-  // Workers that disconnect mid-run just leave it; new ones join from the next round.
+  // Workers that disconnect or go into the background mid-run leave it; new or returning
+  // ones join from the next round.
   for (const id of [...trainer?.active?.workerIds ?? []]) {
-    if (!workers.some(worker => worker.id === id && worker.ready)) trainer.removeWorker(id);
+    if (!workers.some(worker => worker.id === id && canRun(worker))) trainer.removeWorker(id);
   }
   for (const worker of workers.filter(canRun)) trainer?.addWorker(worker.id);
   refreshControls();
@@ -624,6 +626,8 @@ async function initialize() {
   if (role === 'worker') {
     void keepScreenOn();
     document.addEventListener('visibilitychange', () => {
+      // A page in the background can't compute, so tell the laptop to skip this phone.
+      if (connected && !sittingOut) send({ type: 'away', away: document.hidden });
       if (document.hidden) return;
       void keepScreenOn();
       if (reconnectTimer && socket.readyState === WebSocket.CLOSED) {

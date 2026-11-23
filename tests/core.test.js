@@ -365,6 +365,21 @@ test('a worker that leaves mid-round is not waited for, and later rounds go on w
   } finally { task.dispose(); }
 });
 
+test('a worker that leaves the run (e.g. its page went to the background) can come back to it', async () => {
+  const task = createTask();
+  try {
+    const swarmed = swarm(task, { a: steady(), b: steady() }, {
+      onProgress(point) {
+        if (point.round === 1) swarmed.trainer.removeWorker(swarmed.ids.b);
+        if (point.round === 2) swarmed.trainer.addWorker(swarmed.ids.b);
+      },
+    });
+    const run = await swarmed.train({ rounds: 3 });
+    assert.deepEqual(run.history.slice(1).map(point => point.updates.length), [2, 1, 2]);
+    assert.equal(run.participants.length, 2);
+  } finally { task.dispose(); }
+});
+
 test('a worker that joins mid-run gets the current model from the next round', async () => {
   const task = createTask();
   let lateWeights;
