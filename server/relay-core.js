@@ -140,7 +140,7 @@ export function createRelay() {
           }
           const device = typeof message.device === 'string' ? message.device.slice(0, 40) : 'Unknown';
           const note = typeof message.note === 'string' ? message.note.slice(0, 80) : null;
-          Object.assign(workers.get(id), { ready: true, backend: message.backend, tasks: message.tasks, device, note });
+          Object.assign(workers.get(id), { ready: true, backend: message.backend, tasks: message.tasks, device, note, away: Boolean(message.away) });
           presence();
         } else if (role === 'coordinator' && message.type === 'round') {
           if (!Array.isArray(message.assignments) || !(message.deadlineMs > 0)) {

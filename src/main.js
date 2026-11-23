@@ -553,7 +553,8 @@ function connect() {
         void gpuLabel().then(label => { $('phone-gpu').textContent = label; });
         $('worker').querySelector('[data-phase=train]').textContent = `Training on ${backend === 'cpu' ? 'CPU' : 'GPU'}`;
         // A worker that sits out offers no tasks, so the laptop never gives it work.
-        send({ type: 'ready', backend, device: deviceName(), note, tasks: note ? [] : tasks.map(({ taskId }) => taskId) });
+        // A page that (re)connects in the background starts out away, e.g. a tab left open behind others.
+        send({ type: 'ready', backend, device: deviceName(), note, away: document.hidden, tasks: note ? [] : tasks.map(({ taskId }) => taskId) });
         $('sit-out').hidden = !note;
         $('worker').classList.toggle('sitting-out', Boolean(note));
         if (note) {

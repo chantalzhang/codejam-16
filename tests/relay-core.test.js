@@ -45,6 +45,10 @@ test('a phone whose page goes to the background is dropped from the round at onc
   assert.equal(away(), true);
   swarm.connections.b.receive(JSON.stringify({ type: 'away', away: false }));
   assert.equal(away(), false);
+
+  // A page that joins while in the background starts out away.
+  swarm.connections.b.receive(JSON.stringify({ type: 'ready', backend: 'cpu', tasks: ['t'], away: true }));
+  assert.equal(away(), true);
 });
 
 test('the relay averages updates weighted by example count and replies once', () => {
