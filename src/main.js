@@ -501,7 +501,7 @@ function handleGpuReset() {
 // releases the lock whenever the page is hidden, and some only grant it after a tap.
 let screenLock;
 async function keepScreenOn() {
-  if (screenLock && !screenLock.released) return;
+  if (stayClosed || (screenLock && !screenLock.released)) return;
   try {
     screenLock = await navigator.wakeLock.request('screen');
     $('screen').textContent = 'Screen stays on while this tab is open.';
@@ -533,7 +533,7 @@ function receive(message) {
 
 // Connects to the relay. Phones call this again after losing the connection.
 let queue = Promise.resolve(); // Round assignments, one at a time.
-let stayClosed = false, retryMs = 1000, reconnectTimer;
+let stayClosed = false, sessionEnded = false, retryMs = 1000, reconnectTimer;
 function connect() {
   socket = new WebSocket(relayUrl);
   socket.addEventListener('open', () => {
@@ -579,6 +579,13 @@ function connect() {
     } else if (message.type === 'coordinator-left') {
       if (!sittingOut) phoneState('Waiting', { inactive: true });
       $('worker-status').textContent = 'Laptop reconnecting… Keep this page open.';
+    } else if (role === 'worker' && message.type === 'session-ended') {
+      // The laptop ended the session: stop, let the screen sleep, and say thanks.
+      stayClosed = sessionEnded = true;
+      void screenLock?.release();
+      phoneState('Done', { inactive: true });
+      $('worker-status').textContent = 'Thanks for joining! You can close this tab.';
+      $('disconnect').disabled = true;
     } else if (message.type === 'replaced') {
       // Another laptop tab took over (e.g. this page was opened again). Don't fight it.
       stayClosed = true;
@@ -610,7 +617,7 @@ function connect() {
       retryMs = Math.min(retryMs * 2, 10_000);
       return;
     }
-    if (role === 'worker') {
+    if (role === 'worker' && !sessionEnded) {
       $(connectionId).textContent = 'Disconnected. Reload this page to reconnect.';
       phoneState('Disconnected', { inactive: true });
       $('disconnect').disabled = true;
@@ -747,6 +754,11 @@ $('task').addEventListener('change', () => {
   status(`Selected: ${selected.name}.`);
 });
 $('stop').addEventListener('click', () => trainer.stop());
+$('end-session').addEventListener('click', () => {
+  trainer?.stop('Session ended.');
+  send({ type: 'end-session' });
+  status('Disconnected all phones.');
+});
 $('disconnect').addEventListener('click', () => {
   $('worker-status').textContent = 'Disconnected. Reload this page to rejoin.';
   stayClosed = true;

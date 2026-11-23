@@ -12,7 +12,7 @@ export function allowedOrigin(origin, host) {
 }
 
 export function createRelay() {
-  const workers = new Map(); // id → { send, ready, backend, tasks, device, note, away }
+  const workers = new Map(); // id → { send, end, ready, backend, tasks, device, note, away }
   let coordinator = null; // { id, send, demote }
   let pending = null; // The round in progress, see startRound.
   let workersJoined = 0; // Gives each worker a join number, e.g. to pick a data slice.
@@ -106,8 +106,9 @@ export function createRelay() {
     });
   }
 
-  // `send(text)` delivers to this connection. Returns handlers for its messages and close.
-  function connect(sendText) {
+  // `send(text)` delivers to this connection and `close()` closes it. Returns handlers for its
+  // messages and close.
+  function connect(sendText, close = () => {}) {
     const id = crypto.randomUUID();
     const send = message => sendText(JSON.stringify(message));
     let role;
@@ -129,7 +130,7 @@ export function createRelay() {
           }
           role = message.role;
           if (role === 'coordinator') coordinator = { id, send, demote: () => { role = 'replaced'; } };
-          else workers.set(id, { send, ready: false });
+          else workers.set(id, { send, ready: false, end: () => { send({ type: 'session-ended' }); close(); disconnect(); } });
           send({ type: 'welcome', id, role, ...(role === 'worker' && { joinNumber: workersJoined++ }) });
           if (role === 'worker' && lastStatus) send(lastStatus);
           presence();
@@ -147,6 +148,10 @@ export function createRelay() {
             throw new Error('Expected round assignments and a deadline.');
           }
           startRound(message);
+        } else if (role === 'coordinator' && message.type === 'end-session') {
+          // The laptop ends the session: every phone is told and disconnected, including ones
+          // that stopped answering.
+          for (const worker of [...workers.values()]) worker.end();
         } else if (role === 'coordinator' && message.type === 'status') {
           // Small run status for the phone screens (phone count, state, the model's guesses).
           lastStatus = message;

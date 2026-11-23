@@ -296,6 +296,12 @@ try {
   await reloaded.waitForFunction(() => window.sockets.length === 2 && window.sockets[1].readyState === WebSocket.OPEN);
   await reloaded.waitForFunction(() => !document.querySelector('#start').disabled);
 
+  // Disconnect all phones from Dev: phones say thanks and stop, and the room empties.
+  await reloaded.locator('#end-session').click();
+  await gpuWorker.waitForFunction(() => /Thanks for joining/.test(document.querySelector('#worker-status').textContent));
+  await reloaded.waitForFunction(() => document.querySelector('#room-workers').textContent === '0');
+  assert.equal(await gpuWorker.locator('#worker-state').textContent(), 'Done');
+
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({
     environment: 'Headless Chromium / software WebGL. Correctness check, not a phone-speed benchmark.',
@@ -304,7 +310,7 @@ try {
     oneWorkerFinalLoss: one.history.at(-1).loss,
     threeWorkerFinalLoss: three.history.at(-1).loss,
     screenshot: join(process.env.RUNS_DIR, 'laptop.png'),
-    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, reconnect, hidden phones, laptop takeover, and image tasks passed.',
+    checks: 'Worker cards, saved runs, equivalence, stop, disconnect, GPU reset, reconnect, hidden phones, laptop takeover, disconnect all, and image tasks passed.',
   }, null, 2));
 } finally {
   await browser?.close();

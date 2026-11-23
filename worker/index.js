@@ -12,6 +12,8 @@ export class Swarm extends DurableObject {
     server.accept();
     const connection = this.relay.connect(text => {
       try { server.send(text); } catch { /* Already closed. */ }
+    }, () => {
+      try { server.close(1000, 'Session ended'); } catch { /* Already closed. */ }
     });
     server.addEventListener('message', event => connection.receive(typeof event.data === 'string' ? event.data : null));
     server.addEventListener('close', () => connection.disconnect());
