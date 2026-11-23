@@ -12,14 +12,14 @@ export function allowedOrigin(origin, host) {
 }
 
 export function createRelay() {
-  const workers = new Map(); // id → { send, ready, backend, tasks, device, note }
+  const workers = new Map(); // id → { send, ready, backend, tasks, device, note, away }
   let coordinator = null; // { id, send, demote }
   let pending = null; // The round in progress, see startRound.
   let workersJoined = 0; // Gives each worker a join number, e.g. to pick a data slice.
   let lastStatus = null; // The laptop's latest status for phones, also sent to new joiners.
   const presence = () => coordinator?.send({
     type: 'presence',
-    workers: [...workers].map(([id, { ready, backend, tasks, device, note }]) => ({ id, ready, backend, tasks, device, note })),
+    workers: [...workers].map(([id, { ready, backend, tasks, device, note, away }]) => ({ id, ready, backend, tasks, device, note, away })),
   });
 
   // Fan-out: each assigned worker gets the model with its own slice of examples.
@@ -151,6 +151,12 @@ export function createRelay() {
           // Small run status for the phone screens (phone count, state, the model's guesses).
           lastStatus = message;
           for (const worker of workers.values()) worker.send(message);
+        } else if (role === 'worker' && message.type === 'away') {
+          // The phone's page went into the background (another app, locked screen), where it
+          // can't compute. Stop waiting for it this round; the laptop skips it until it's back.
+          workers.get(id).away = Boolean(message.away);
+          if (message.away) dropWorker(id, 'page in the background');
+          presence();
         } else if (role === 'worker' && message.type === 'update') {
           addUpdate(id, message);
         } else if (role === 'worker' && message.type === 'worker-error') {

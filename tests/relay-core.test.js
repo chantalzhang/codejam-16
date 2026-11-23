@@ -28,10 +28,24 @@ function setup(names) {
     assignments: assignments.map(([name, count]) => ({ workerId: ids[name] ?? name, offset: 0, count })), ...extra,
   }));
   const results = () => toLaptop.filter(message => message.type === 'round-result');
-  return { ids, handlers, connections, startRound, results };
+  return { ids, handlers, connections, startRound, results, toLaptop };
 }
 
 const update = (values, count) => ({ type: 'update', count, delta: packFloats(Float32Array.from(values)), loss: 1, computeMs: 5 });
+
+test('a phone whose page goes to the background is dropped from the round at once, and marked away', () => {
+  const swarm = setup(['a', 'b']);
+  swarm.handlers.a = (round, reply) => reply(update([1, 1], 1));
+  swarm.startRound([['a', 1], ['b', 1]]);
+  assert.equal(swarm.results().length, 0, 'Still waiting for b');
+  swarm.connections.b.receive(JSON.stringify({ type: 'away', away: true }));
+  const [result] = swarm.results();
+  assert.deepEqual(result.dropped, [{ workerId: swarm.ids.b, reason: 'page in the background' }]);
+  const away = () => swarm.toLaptop.filter(message => message.type === 'presence').at(-1).workers.find(worker => worker.id === swarm.ids.b).away;
+  assert.equal(away(), true);
+  swarm.connections.b.receive(JSON.stringify({ type: 'away', away: false }));
+  assert.equal(away(), false);
+});
 
 test('the relay averages updates weighted by example count and replies once', () => {
   const swarm = setup(['a', 'b']);

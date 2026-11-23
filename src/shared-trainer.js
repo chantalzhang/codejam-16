@@ -48,12 +48,12 @@ export class SharedTrainer {
     }
   }
 
-  // A worker connected mid-run: it gets the current model and trains from the next round.
-  // Workers already in this run (including dropped ones) are not re-added.
+  // A worker connected mid-run, or came back (e.g. its page was in the background): it gets
+  // the current model and trains from the next round.
   addWorker(workerId) {
     const run = this.active;
-    if (!run || run.cancelReason || run.participants.includes(workerId)) return;
-    run.participants.push(workerId);
+    if (!run || run.cancelReason || run.workerIds.includes(workerId)) return;
+    if (!run.participants.includes(workerId)) run.participants.push(workerId);
     run.workerIds.push(workerId);
   }
 
@@ -149,9 +149,10 @@ export class SharedTrainer {
         // Worker i gets examples [i × batchSize, (i + 1) × batchSize) of each global step.
         const assignments = picked.map((workerId, i) => ({ workerId, offset: i * batchSize, count: batchSize }));
         const waitStarted = performance.now();
-        // Round 1 also downloads data and warms up each worker's GPU.
+        // Round 1 also downloads data and warms up each worker's GPU. Phones that need longer
+        // sit out and join a later round, so one stuck phone can't hold up the start for long.
         const { average, updates, dropped } = await this.requestUpdates(
-          run, round, assignments, weights, round === 1 ? 4 * deadlineMs : deadlineMs);
+          run, round, assignments, weights, round === 1 ? 1.5 * deadlineMs : deadlineMs);
         const waitMs = performance.now() - waitStarted;
         checkCancelled();
         for (const { workerId } of updates) strikes.delete(workerId);
