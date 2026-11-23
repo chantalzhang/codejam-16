@@ -15,7 +15,7 @@ export function attachRelay(server) {
   };
   server.on('upgrade', upgrade);
   sockets.on('connection', socket => {
-    const client = relay.connect(text => { if (socket.readyState === WebSocket.OPEN) socket.send(text); });
+    const client = relay.connect(text => { if (socket.readyState === WebSocket.OPEN) socket.send(text); }, () => socket.close());
     socket.on('error', () => {});
     socket.on('message', (data, binary) => client.receive(binary ? null : data.toString()));
     socket.on('close', () => client.disconnect());

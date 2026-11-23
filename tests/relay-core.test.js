@@ -51,6 +51,26 @@ test('a phone whose page goes to the background is dropped from the round at onc
   assert.equal(away(), true);
 });
 
+test('ending the session tells every phone, closes their connections, and empties the room', () => {
+  const relay = createRelay();
+  const toLaptop = [];
+  const laptop = relay.connect(text => toLaptop.push(JSON.parse(text)));
+  laptop.receive(JSON.stringify({ type: 'join', role: 'coordinator' }));
+  const phones = ['a', 'b'].map(() => {
+    const phone = { inbox: [], closed: false };
+    phone.connection = relay.connect(text => phone.inbox.push(JSON.parse(text).type), () => { phone.closed = true; });
+    phone.connection.receive(JSON.stringify({ type: 'join', role: 'worker' }));
+    phone.connection.receive(JSON.stringify({ type: 'ready', backend: 'cpu', tasks: ['t'] }));
+    return phone;
+  });
+  phones[0].connection.receive(JSON.stringify({ type: 'end-session' }));
+  assert.ok(phones[0].inbox.includes('error'), 'Only the laptop can end the session');
+  laptop.receive(JSON.stringify({ type: 'end-session' }));
+  // Both are removed right away, even one that would never answer or close on its own.
+  assert.ok(phones.every(phone => phone.inbox.includes('session-ended') && phone.closed));
+  assert.deepEqual(toLaptop.filter(message => message.type === 'presence').at(-1).workers, []);
+});
+
 test('the relay averages updates weighted by example count and replies once', () => {
   const swarm = setup(['a', 'b']);
   swarm.handlers.a = (round, reply) => reply(update([1, -1], 1));
