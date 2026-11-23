@@ -242,6 +242,13 @@ try {
   assert.ok(counts.includes(1), 'Rounds went on without the hidden phone');
   assert.equal(counts.at(-1), 2, 'The phone rejoined the same run');
   assert.ok(hiddenRun.history.every(point => point.waitMs < 5_000), 'No round waited for the hidden phone');
+  // A phone page that opens (or reconnects) in the background doesn't count until it's shown.
+  const background = await browser.newPage();
+  await background.addInitScript(() => Object.defineProperty(document, 'hidden', { value: true, configurable: true }));
+  await background.goto(`${base}?role=worker&backend=webgl`);
+  await page.waitForFunction(() => [...document.querySelectorAll('#workers .card:not(.left)')].filter(card => /page in the background/.test(card.textContent)).length === 1);
+  assert.equal(await page.locator('#room-workers').textContent(), '2');
+  await background.close();
   await flaky.close();
   await readyWorkers(1);
 
